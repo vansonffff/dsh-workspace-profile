@@ -1,0 +1,169 @@
+# Architecture
+
+## 1. The shape
+
+```
+   cordis loader row "workspace-profile"   (one row — see COMPATIBILITY §2)
+              │
+       apply(ctx, config)                  src/index.js
+              │
+   ┌──────────┴───────────────────────────────────────────────────────────┐
+   │  ctx.settings        → src/settings.js   the stored document         │
+   │  ctx.workspaceRegistry → src/workspace-resolution.js  cwd → id       │
+   │  ctx.systemPrompt    → src/profile-runtime.js   three dynamic sections │
+   │  ctx.skills          → src/skill-policy.js  per-Agent shadows        │
+   │  ctx.llm             → src/model-catalog.js  catalog + preflight     │
+   │  ctx.subagents       → src/subagent-dispatch.js  the child Agent     │
+   │  ctx.tools/commands  → src/tools.js, src/commands.js  entry points   │
+   │  ctx.typert          → src/service.js + src/remote/  browser surface │
+   └──────────────────────────────────────────────────────────────────────┘
+```
+
+`src/index.js` is the composition root. It owns no logic; it acquires each seam
+through `ctx.inject` and hands it to the module that owns it.
+
+## 2. Why everything is acquired through `ctx.inject`
+
+A static `inject` array makes the whole plugin wait for a service; reading a
+service that is not there yet **poisons the context permanently**
+(`cannot get property "x" without inject`), so a `?.` does not save it. Each seam
+is therefore taken as it arrives, and the plugin degrades honestly when one never
+does:
+
+| Missing | Consequence |
+|---|---|
+| `settings` | no configuration; reads answer from an empty document, writes fail with a named error |
+| `workspaceRegistry` | no Workspace resolves; no section, no dispatch |
+| `systemPrompt` | no injection; the tool and command still work |
+| `skills` | a Workspace's disable policy is not enforced; a warning says so |
+| `llm` | routes cannot be listed or preflighted; dispatch refuses with a named error |
+| `subagents` / `spawn` | the tool explains that delegation is unavailable |
+| `typert` | no browser surface; tool, command and injection unaffected |
+
+The `capabilities()` map reports which of those happened, and the Settings page
+renders the gaps rather than a control that fails.
+
+## 3. Module map
+
+| Module | Owns | Depends on |
+|---|---|---|
+| `src/errors.js` | the error vocabulary and `explainStopReason` | nothing |
+| `src/policy.js` | the data model: defaults, validation, migration, resolution, the recommendation table | `errors` |
+| `src/settings.js` | the permissive schema, the store, revision fencing | `policy`, `schemastery` |
+| `src/workspace-resolution.js` | cwd → `WorkspaceId`, sync index + async canon | nothing |
+| `src/profile-runtime.js` | Profile/Perspective text loading and the three sections | `policy`, `subagent-registry` (sanitizer) |
+| `src/skill-policy.js` | per-Agent shadows; the Settings skill catalog | `policy`, `dsh-scope` |
+| `src/model-catalog.js` | provider/model/effort catalog, route preflight | `errors` |
+| `src/subagent-registry.js` | definition CRUD, persona and dispatch-prompt compilers | `policy`, `errors` |
+| `src/subagent-dispatch.js` | the one lifecycle both entry points share | `policy`, `errors`, `subagent-registry` |
+| `src/tools.js` | `workspace_subagent` | `dsh-tools`, `errors` |
+| `src/commands.js` | `/agent` and its grammar | `errors` |
+| `src/instructions-probe.js` | AGENTS.md *presence* for the Settings page | nothing |
+| `src/remote/operations.js` | the business operations behind the Remote | most of the above |
+| `src/service.js` | the `TypertRemoteService` and its `remoteX` aliases | `dsh-typert-protocol` |
+| `client.js` | the Settings section | platform seed only |
+
+## 4. Data flow
+
+### A configuration change
+
+```
+Settings page → remote.savePolicy({ workspaceId, expectedRevision, patch })
+              → operations.savePolicy  validates the Profile/Perspective PAIR
+              → store.write(pathOps, expectedRevision)      ← revision fence
+              → settings provider persists + commits
+              → store.watch fires → readiness memo replaced, catalog invalidated
+              → the next `agent/pre-step` re-applies the Skill policy
+              → the next prompt assembly computes the section text fresh
+```
+
+Nothing invalidates a cache by hand and nothing rewrites history. "Takes effect
+from the next Agent step" is a consequence of computing the text at assembly time.
+
+### A delegation
+
+```
+workspace_subagent | /agent
+        └─→ SubagentDispatcher.dispatch
+              resolve Workspace → read policy → find enabled definition
+              → catalog.assertRoute(...)         ← before any child resource
+              → compile persona + assignment
+              → ctx.subagents.start('spawn', { agentOptions, persona, maxDepth: 3 })
+              → await run.result   ┐ both caught separately
+              → await run.dispose()┘ so neither erases the other
+              → interpret stopReason → text
+```
+
+### Reading the injected text back
+
+```
+Settings → 工作区 → 查看注入的提示词
+        └─→ remote.previewInjection({ workspaceId[, profile, perspective] })
+              → operations.previewInjection
+              → composeInjectionSections  ─┐ the same three functions the
+                (profile-runtime.js)       ─┘ systemPrompt sections call
+              → { saved, draft, textsLoaded, note }
+```
+
+`saved` is composed from the stored policy; `draft` only when the caller passes a
+pair that `validateProfilePerspective` accepts, and it is composed through the
+gate a save would leave behind (`configured: true`). The section names and orders
+are the live registration's constants, so the dialog's headings and the session
+transcript's headings are the same strings. Nothing here writes, and the session
+`/perspective` override is deliberately out of reach — it belongs to a session,
+and this is a Workspace-scoped read.
+
+## 5. Decisions worth not re-litigating
+
+**The schema is permissive; validation is explicit.** `SettingsProvider.register`
+rejects the *registration* when a stored section fails its schema, which would
+leave the page unable to fix the document it is complaining about. See
+`docs/COMPATIBILITY.md` §4.
+
+**Writes are path-addressed and revision-fenced, never wholesale.** A caller
+holding a partial view cannot delete a field it never saw. A write with no
+`expectedRevision` is refused outright.
+
+**Business failures are returned, not thrown, from write operations.** The wire
+error code is a closed set this plugin cannot extend, so a conflict cannot ride as
+one. The result key is `saved`, not `ok`, because the client API already wraps
+every call in `{ ok, value }`.
+
+**One dispatcher, two entry points.** A second path would drift on the route
+preflight, the depth cap, cancellation and disposal — none of which a user can
+see, and all of which matter.
+
+**Skill disabling is a per-Agent scope shadow.** `SkillRegistry` has no filter
+hook; layering is the mechanism, and it gives isolation, child consistency and
+invalidation for free. Excluding a built-in Skill means *not offering the toggle*
+in Settings, not refusing to honour a saved override — a Skill's source can change
+under a saved policy, and silently re-enabling something the user turned off is
+the worse failure.
+
+**User-authored text is sanitized before it enters a prompt section.** Section
+interpolation is strict, so an accidental `{{…}}` would abort assembly for the
+parent session.
+
+**Two questions that used to be one.** "Has this Workspace been configured"
+(`hasStoredPolicy`: any stored value) and "does this Workspace write anything into
+the prompt" (`onboardingStatus === 'configured'`) are different predicates, and
+the page used to answer only the first — with a green badge. It now reports both:
+the badge keeps its meaning, and a separate 提示词注入 row answers the second, per
+part, because the expert directory is not gated on a Profile. See
+`docs/MILESTONE-0.1.2.md`.
+
+**The client bundle mounts its own Remote contribution.** `dsh-api-remotes`
+discovers nothing; a namespace exists only because the plugin's bundle mounts it.
+
+**Everything user-visible is in Chinese, with the English term beside it.** The
+Settings nav reads 工作区组合 / Workspace Composition; the Profile labels read
+破产重整 (Bankruptcy). A reader who knows either language can navigate.
+
+## 6. What this plugin does not own
+
+`AGENTS.md`; Agent presets; the agent loop; model providers and adapters; tools,
+approval and sandbox; Workspace and Session creation, persistence and resume;
+the child-session base; the original project files.
+
+It reads all of those and writes to exactly one place: its own settings
+namespace.

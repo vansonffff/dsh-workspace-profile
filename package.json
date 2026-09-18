@@ -1,0 +1,56 @@
+{
+  "name": "dsh-workspace-profile",
+  "version": "0.1.2",
+  "description": "Workspace Composition for DeepSeek Harness \u2014 per-Workspace Profile, default Perspective, Skill policy and reusable Workspace Subagent definitions, with a Settings surface and a unified dispatch entry point.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "main": "./src/index.js",
+  "exports": {
+    ".": {
+      "default": "./src/index.js"
+    },
+    "./typert": {
+      "default": "./typert.host.js"
+    },
+    "./remote-client": {
+      "default": "./typert.remote-client.js"
+    },
+    "./client": {
+      "default": "./client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "profiles",
+    "perspectives",
+    "scripts",
+    "client.js",
+    "typert.host.js",
+    "typert.remote-client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "docs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "probe:boot": "node scripts/boot-probe.mjs",
+    "probe:remote": "node scripts/remote-probe.mjs",
+    "probe:prompt": "node scripts/prompt-probe.mjs",
+    "probe:perspective": "node scripts/perspective-probe.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

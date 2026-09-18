@@ -1,0 +1,30 @@
+# dsh-workspace-profile bundle patch — one loader row.
+#
+# ## Why exactly one row
+#
+# `@deepseek-ai/dsh-client-modules` discovers a package's browser bundle by
+# walking the Loader's *active* entries and keying each source by
+# `baseUrl + loaderName`. A package reached by more than one active entry is
+# rejected — "resolves from multiple active Loader sources" — and the rejection is
+# **not fatal**: it is reported through `logger.warn`, the package simply gets no
+# browser bundle, and the only symptom is a Settings section that never appears.
+# The configuration switches below replace what separate rows would have offered.
+#
+# Later layers address this row by `id`:
+#
+#   - id: workspace-profile
+#     config:
+#       enabled: false
+#
+# The row `name` MUST equal the client bundle's
+# `window.__ModuleLoader__.load({ id })`, which is the package name. A mismatch
+# fails as `bundle <url> loaded without registering "<id>"`.
+
+- insert:
+    - id: workspace-profile
+      name: dsh-workspace-profile
+      config:
+        # Whether the plugin activates at all. Off withdraws the prompt sections,
+        # the model tool, the `/agent` command and the Settings section together,
+        # while keeping the stored configuration intact.
+        enabled: true
