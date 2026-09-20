@@ -1,4 +1,51 @@
-.DS_Store
-node_modules/
-npm-debug.log*
+# 本包自身 git 仓库的忽略规则（2026-09-19 建仓时创建；原本没有此文件）
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 本包 git 仓库的忽略规则 —— **工作区根 `.gitignore` 的完整镜像**
+#
+# 为什么包内要重复一遍：`.gitignore` **不跨仓库继承**。本包同时是一个独立 git
+# 仓库，其工作树根就是本目录，读不到工作区根那份规则。只在根上写，包仓库就会
+# 把根上排除的东西提交进历史 —— 实测已发生：包里缺 `*.tgz` / `.DS_Store` 时，
+# 包仓库把 `dsh-kdocs-inside-0.2.8.tgz` 与 `.DS_Store` 收了进去。
+#
+# ⚠ 两处必须**一起改**，否则漂移：根上收紧、包内没跟 → 包仓库泄漏。
+# 校验方法（内层与外层跟踪集合应完全相同）：
+#   comm -3 <(git ls-files | sed 's|^<包>/||' | sort) <(git -C <包> ls-files | sort)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 依赖与包管理器缓存
+node_modules/
+.pnpm-store/
+
+# 凭据与私钥（DSH 凭据 / 金山文档 Token / 自签名证书私钥）
+**/.tmp*/
+
+# 验收截图 —— 含客户案件机密与第三方账号登录态，绝不入库
+**/docs/**/*.png
+**/docs/**/*.jpg
+**/docs/**/*.jpeg
+**/docs/**/*.gif
+**/docs/**/*.webp
+**/docs/**/*.mp4
+**/docs/**/*.mov
+
+# 探针临时文件
+.kimi-command.json
+.kimi-net.json
+
+# 测试与构建中间产物（源码在，可重建）
+.test-build/
+.baseline/
+coverage/
+*.backup
+*.tsbuildinfo
+
+# 打包产物（发布走 DSH-release 仓库）
+*.tgz
+
+# 平台二进制（与 CPU 架构绑定；文本构建素材不在此列）
+**/.tools/esbuild
+
+# macOS
+.DS_Store
+Thumbs.db
