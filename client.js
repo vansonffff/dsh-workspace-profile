@@ -558,6 +558,23 @@ window.__ModuleLoader__.load({
         injectionDirty: '上方表单有未保存的改动。下面显示的是「已保存」的内容 —— 保存后才会变成新选择的样子。',
         injectionDraftInvalid: '草稿无效，无法预览：',
         injectionNotLoaded: 'Profile 正文尚未加载完成，这次显示可能不完整；稍后重试即可。',
+        matterTitle: '案件（Matter）',
+        matterHint: '以上由工作区目录中的 matter.yaml 读出，本页只读。插件不会因为你改了 Profile 就回写案件文件，也不会因为案件文件变了就自动改你的配置。',
+        matterNone: '这个目录下没有 matter.yaml —— 普通项目目录就是这样，不是错误。',
+        matterUnreadable: '发现了 matter.yaml，但无法读取：',
+        matterName: '名称',
+        matterId: 'Matter ID',
+        matterType: '类型',
+        matterRole: '正式角色',
+        matterStage: '程序阶段',
+        matterModules: '模块',
+        matterMatch: '一致',
+        matterMismatch: '不一致',
+        matterOverride: '本次会话覆盖',
+        matterUnknown: '未知',
+        matterProfileMatch: '类型与工作区配置',
+        matterPerspectiveMatch: '正式角色与默认视角',
+        matterApplyHint: '会写入 Profile 与默认视角，保存后生效。',
         injectionUnavailable: '无法显示注入内容：',
         injectionLoadFailed: '读取注入内容失败',
         injectionOverrideNote: '这里是「工作区默认」立场。会话内用 `/perspective` 做的临时覆盖不会出现在这里。',
@@ -677,6 +694,23 @@ window.__ModuleLoader__.load({
         injectionDirty: 'The form above has unsaved edits. What follows is the SAVED content — it becomes your new choice only after you save.',
         injectionDraftInvalid: 'The draft is not valid, so it cannot be previewed: ',
         injectionNotLoaded: 'The Profile bodies have not finished loading, so this view may be incomplete. Retry in a moment.',
+        matterTitle: 'Matter',
+        matterHint: 'Read from matter.yaml in this workspace directory; this page is read-only. The plugin never rewrites the matter because you changed a Profile, and never changes your configuration because the file did.',
+        matterNone: 'No matter.yaml in this directory — that is what an ordinary project directory looks like, not an error.',
+        matterUnreadable: 'A matter.yaml was found but could not be read: ',
+        matterName: 'Name',
+        matterId: 'Matter ID',
+        matterType: 'Type',
+        matterRole: 'Formal role',
+        matterStage: 'Stage',
+        matterModules: 'Modules',
+        matterMatch: 'Match',
+        matterMismatch: 'Mismatch',
+        matterOverride: 'Session override',
+        matterUnknown: 'Unknown',
+        matterProfileMatch: 'Type vs workspace Profile',
+        matterPerspectiveMatch: 'Formal role vs default Perspective',
+        matterApplyHint: 'Writes the Profile and default Perspective; takes effect once saved.',
         injectionUnavailable: 'Cannot show the injection: ',
         injectionLoadFailed: 'Could not read the injected content',
         injectionOverrideNote: 'This is the WORKSPACE DEFAULT stance. A per-session `/perspective` override does not appear here.',
@@ -781,6 +815,7 @@ window.__ModuleLoader__.load({
       { method: 'snapshot', implementation: 'remoteSnapshot', parameters: [], cancellable: true },
       { method: 'skills', implementation: 'remoteSkills', parameters: ARGS, cancellable: true },
       { method: 'previewInjection', implementation: 'remotePreviewInjection', parameters: ARGS, cancellable: true },
+      { method: 'matter', implementation: 'remoteMatter', parameters: ARGS, cancellable: true },
       { method: 'models', implementation: 'remoteModels', parameters: [], cancellable: true },
       { method: 'validateRoute', implementation: 'remoteValidateRoute', parameters: ARGS, cancellable: true },
       { method: 'savePolicy', implementation: 'remoteSavePolicy', parameters: ARGS },
@@ -1098,6 +1133,12 @@ window.__ModuleLoader__.load({
        * open yet" and "open but empty" cannot be read as the same thing.
        */
       const [injection, setInjection] = useState(null);
+      /**
+       * The CaseBench Matter this Workspace's directory declares, and how it
+       * compares with the stored configuration. Read-only: the page reports, it
+       * does not re-point the Workspace.
+       */
+      const [matter, setMatter] = useState(null);
       const [injectionCopied, setInjectionCopied] = useState(false);
       const [, setLocaleRev] = useState(0);
 
@@ -1164,6 +1205,88 @@ window.__ModuleLoader__.load({
       // snapshot that comes back carries the post-write policy.
       const policy = selected ? selected.policy : null;
       const revision = snapshot ? snapshot.revision : null;
+
+      // Read the Matter whenever the selection changes *or* the revision moves.
+      // The facts are a property of the directory, but the comparison is against
+      // the stored policy, so a save must recompute the verdict rather than leave
+      // a stale "mismatch" on screen. Declared after `revision` because the
+      // dependency array evaluates it; earlier would be a temporal dead zone.
+      useEffect(() => {
+        if (selectedId === null) {
+          setMatter(null);
+          return undefined;
+        }
+        let alive = true;
+        setMatter({ state: 'loading' });
+        void (async () => {
+          try {
+            const value = unwrap(await remote.matter({ workspaceId: selectedId }));
+            if (alive) setMatter({ state: 'ready', value });
+          } catch (error) {
+            if (alive) setMatter({ state: 'error', error: failureOf(error) });
+          }
+        })();
+        return () => { alive = false; };
+      }, [remote, selectedId, revision]);
+
+      /**
+       * The Matter card: what the directory declares, and whether this Workspace
+       * agrees with it.
+       *
+       * **It reports; it does not apply.** A mismatch is a fact to show, not a
+       * defect to fix silently — re-pointing a Workspace because a file on disk
+       * changed would make a professional judgement on the user's behalf, and the
+       * file can change without the user touching this page.
+       */
+      const renderMatterCard = () => {
+        if (selected === null) return null;
+        const title = t('matterTitle');
+        if (matter === null || matter.state === 'loading') {
+          return jsx(Card, { title, children: jsx('div', { style: s.hint, children: t('loading') }) });
+        }
+        if (matter.state === 'error') {
+          return jsx(Card, { title, children: jsx('div', { style: s.notice(WARN), children: t('loadFailed') + '：' + matter.error.message }) });
+        }
+        const value = matter.value;
+        if (value.available === false) {
+          return jsx(Card, { title, children: jsx('div', { style: s.hint, children: value.message }) });
+        }
+        if (!value.discovered) {
+          // Two different facts share `discovered: false`, and conflating them would
+          // put a false statement on the page: "there is no matter.yaml here" is
+          // wrong when one exists and could not be read. The problem, when present,
+          // is the whole answer.
+          return jsx(Card, { title, children: value.problem
+            ? jsx('div', { style: s.notice(WARN), children: t('matterUnreadable') + value.problem })
+            : jsx('div', { style: s.hint, children: t('matterNone') }) });
+        }
+        const facts = value.matter;
+        const verdict = (which) => {
+          const kind = value.match[which].verdict;
+          const label = kind === 'match' ? t('matterMatch')
+            : kind === 'override' ? t('matterOverride')
+            : kind === 'mismatch' ? t('matterMismatch')
+            : t('matterUnknown');
+          const colour = kind === 'match' ? SUCCESS : kind === 'mismatch' ? WARN : LABEL_TERTIARY;
+          return jsx(Pill, { colour, children: label });
+        };
+        return jsxs(Card, { title, children: [
+          value.problem
+            ? jsx('div', { style: s.notice(WARN), children: t('matterUnreadable') + value.problem })
+            : null,
+          jsx(Field, { label: t('matterName'), children: jsx(Text, { style: s.fieldValue, children: facts.name }) }),
+          jsx(Field, { label: t('matterId'), children: jsx(Text, { style: s.fieldValue, children: facts.id }) }),
+          jsx(Field, { label: t('matterType'), children: jsx(Text, { style: s.fieldValue, children: facts.type }) }),
+          jsx(Field, { label: t('matterRole'), children: jsx(Text, { style: s.fieldValue, children: facts.role }) }),
+          jsx(Field, { label: t('matterStage'), children: jsx(Text, { style: s.fieldValue, children: facts.stage }) }),
+          facts.modules.length > 0
+            ? jsx(Field, { label: t('matterModules'), children: jsx(Text, { style: s.fieldValue, children: facts.modules.join('、') }) })
+            : null,
+          jsx(Field, { label: t('matterProfileMatch'), children: verdict('profile') }),
+          jsx(Field, { label: t('matterPerspectiveMatch'), children: verdict('perspective') }),
+          jsx('div', { style: s.hint, children: t('matterHint') }),
+        ] });
+      };
       /**
        * The stances the selected (or drafted) workspace type offers.
        *
@@ -1564,6 +1687,8 @@ window.__ModuleLoader__.load({
                 ] }) }),
                 jsx('div', { style: s.hint, children: t('perspectiveHint') }),
               ] }),
+
+              renderMatterCard(),
 
               // This card reports what is *stored*, which is what the runtime
               // injects; the card above edits a draft. Before the note existed the

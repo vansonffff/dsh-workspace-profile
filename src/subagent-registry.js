@@ -251,9 +251,12 @@ export function compilePersona(definition, context) {
  * @param {string} input.workspaceTitle - the Workspace's display title.
  * @param {string} input.profileLabel - the Profile's display label.
  * @param {string} input.perspectiveLabel - the effective Perspective's label, or `''`.
+ * @param {object|null} [input.matter] - the CaseBench Matter the Workspace sits
+ *   inside, when one was discovered. Its fields come off a file in the user's own
+ *   workspace, so every one of them is sanitized like any other user-authored text.
  * @returns {string} the complete prompt for the child.
  */
-export function compileDispatchTask({ task, workspaceTitle, profileLabel, perspectiveLabel }) {
+export function compileDispatchTask({ task, workspaceTitle, profileLabel, perspectiveLabel, matter }) {
   const body = typeof task === 'string' ? task.trim() : '';
   const lines = [
     '下列任务由同一工作区中的主 Agent 派遣，你没有父会话的历史，请仅依据本说明与自行读取的材料完成。',
@@ -261,6 +264,7 @@ export function compileDispatchTask({ task, workspaceTitle, profileLabel, perspe
     `工作区：${sanitizeTemplateText(workspaceTitle)}`,
     `工作区类型：${sanitizeTemplateText(profileLabel)}`,
     perspectiveLabel === '' ? '工作立场：未指定' : `工作立场：${sanitizeTemplateText(perspectiveLabel)}`,
+    ...matterContextLines(matter),
     '',
     '任务：',
     '"""',
@@ -275,6 +279,36 @@ export function compileDispatchTask({ task, workspaceTitle, profileLabel, perspe
     '5. 输出使用与任务相同的语言。',
   ];
   return lines.join('\n');
+}
+
+/**
+ * The Matter context a child cannot recover on its own.
+ *
+ * A dispatched child gets no parent history, so without this it would not know
+ * which matter it is working on. The **effective** stance is already the 工作立场
+ * line immediately above; the Matter's **formal** role is printed here so the two
+ * are adjacent and a disagreement between them is visible rather than hidden —
+ * the stance in force is the one to work from, and this records what the matter
+ * itself says.
+ *
+ * @param {object|null|undefined} matter - the resolved Matter facts, or nothing.
+ * @returns {string[]} the lines to append, or `[]` when there is no Matter.
+ */
+function matterContextLines(matter) {
+  if (matter === null || matter === undefined || typeof matter !== 'object') return [];
+  const field = (label, value) => {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return text === '' ? null : `  ${label}：${sanitizeTemplateText(text)}`;
+  };
+  const fields = [
+    field('名称', matter.name),
+    field('Matter ID', matter.id),
+    field('类型', matter.type),
+    field('正式角色', matter.role),
+    field('程序阶段', matter.stage),
+  ].filter((line) => line !== null);
+  if (fields.length === 0) return [];
+  return ['', '案件 (Matter)：', ...fields];
 }
 
 /**

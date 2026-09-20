@@ -51,6 +51,9 @@ renders the gaps rather than a control that fails.
 | `src/policy.js` | the data model: defaults, validation, migration, resolution, the recommendation table | `errors` |
 | `src/settings.js` | the permissive schema, the store, revision fencing | `policy`, `schemastery` |
 | `src/workspace-resolution.js` | cwd → `WorkspaceId`, sync index + async canon | nothing |
+| `src/matter-yaml.js` | the `matter.yaml` subset reader; refuses everything else | nothing |
+| `src/matter-resolution.js` | cwd → Matter Root, sync lookup + async discovery | `matter-yaml` |
+| `src/matter-match.js` | CaseBench type/role → Profile/Perspective, and the verdicts | `policy` |
 | `src/profile-runtime.js` | Profile/Perspective text loading and the three sections | `policy`, `subagent-registry` (sanitizer) |
 | `src/skill-policy.js` | per-Agent shadows; the Settings skill catalog | `policy`, `dsh-scope` |
 | `src/model-catalog.js` | provider/model/effort catalog, route preflight | `errors` |
@@ -93,6 +96,25 @@ workspace_subagent | /agent
               → await run.dispose()┘ so neither erases the other
               → interpret stopReason → text
 ```
+
+### Reading a Matter
+
+```
+Settings → 工作区 → the Matter card
+        └─→ remote.matter({ workspaceId })
+              → operations.matter
+              → getResolver().describe(id).path      ← the Workspace directory
+              → MatterResolver.resolvePath(path)
+                    → findMatter   walk up to the nearest matter.yaml
+                    → parseMatterYaml   the strict subset reader
+              → matchMatter({ matter, policy })      ← the tables in matter-match.js
+              → { discovered, matter, problem, match }
+```
+
+The same resolver is primed at every step boundary (`agent/created` and
+`agent/pre-step`), so a delegation reads the Matter synchronously and never blocks
+on the filesystem. **Nothing in this path writes**: the page reports a mismatch, it
+does not re-point the Workspace. See `docs/MILESTONE-0.2.md`.
 
 ### Reading the injected text back
 
@@ -139,6 +161,27 @@ invalidation for free. Excluding a built-in Skill means *not offering the toggle
 in Settings, not refusing to honour a saved override — a Skill's source can change
 under a saved policy, and silently re-enabling something the user turned off is
 the worse failure.
+
+**The Matter reader refuses rather than guesses.** `matter.yaml` is YAML and this
+package has no dependencies, so it reads the subset CaseBench actually writes
+(PyYAML `safe_dump`, block style) and throws on everything else. A parser that
+guessed would not fail loudly — it would return a wrong `role`, and a wrong role
+silently selects the wrong professional stance for a live matter. An unreadable
+Matter degrades to "no Matter", which the page can show.
+
+**The Matter mapping is a table, not name coincidence.** CaseBench's role tokens and
+this plugin's Perspective ids were specified separately. For `litigation` and
+`bankruptcy` they coincide, and that is *recorded* in `TYPE_TO_PROFILE` /
+`ROLE_TO_PERSPECTIVE` rather than relied upon; non-litigation diverges on purpose
+(`debtor` → `debtor-oc`). A Matter whose own type/role pair is impossible is
+reported, never translated.
+
+**The Matter is not injected into the parent prompt.** The requirement is a Settings
+readout. The section names and orders are frozen and measured
+(`docs/COMPATIBILITY.md` §7), so a new prompt contribution is a cost paid for a
+purpose — and the Workspace's own Profile and Perspective sections already tell the
+model its domain and stance. What a Matter *does* reach is the child: a dispatched
+subagent has no parent history, so its assignment carries the Matter's identity.
 
 **User-authored text is sanitized before it enters a prompt section.** Section
 interpolation is strict, so an accidental `{{…}}` would abort assembly for the

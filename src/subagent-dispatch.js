@@ -73,9 +73,10 @@ export class SubagentDispatcher {
    * @param {() => string} [deps.now] - clock, injectable for tests.
    * @param {{ info: Function, warn: Function }} [deps.logger] - diagnostics sink.
    */
-  constructor({ getSubagents, getResolver, getStore, getCatalog, now, logger }) {
+  constructor({ getSubagents, getResolver, getMatterResolver, getStore, getCatalog, now, logger }) {
     /** @private */ this.getSubagents = getSubagents;
     /** @private */ this.getResolver = getResolver;
+    /** @private */ this.getMatterResolver = getMatterResolver;
     /** @private */ this.getStore = getStore;
     /** @private */ this.getCatalog = getCatalog;
     /** @private */ this.now = now ?? (() => new Date().toISOString());
@@ -105,7 +106,11 @@ export class SubagentDispatcher {
     }
     const document = this.getStore().read().document;
     const { policy, configured } = resolveWorkspacePolicy(document, workspaceId, this.now());
-    return { workspaceId, workspace: this.getResolver().describe(workspaceId), policy, configured };
+    // Synchronous by design: the Matter was resolved and memoised at the step
+    // boundary, so a delegation never blocks on the filesystem. A miss is simply
+    // "no Matter", and the child gets no Matter block rather than a wrong one.
+    const matter = this.getMatterResolver?.()?.matterForAgent(agent)?.facts ?? null;
+    return { workspaceId, workspace: this.getResolver().describe(workspaceId), policy, configured, matter };
   }
 
   /**
@@ -133,7 +138,7 @@ export class SubagentDispatcher {
    * @throws {NoWorkspaceContextError|UnknownSubagentError|import('./errors.js').UnresolvableRouteError|SubagentRunFailedError}
    */
   async dispatch({ agent, reference, task, signal }) {
-    const { workspaceId, workspace, policy } = this.resolveContext(agent);
+    const { workspaceId, workspace, policy, matter } = this.resolveContext(agent);
 
     const definition = findSubagent(policy, reference);
     if (definition === undefined) {
@@ -167,7 +172,7 @@ export class SubagentDispatcher {
     const workspaceTitle = workspace?.title ?? workspaceId;
 
     const persona = compilePersona(definition, { workspaceTitle, profileLabel, perspectiveLabel });
-    const prompt = compileDispatchTask({ task, workspaceTitle, profileLabel, perspectiveLabel });
+    const prompt = compileDispatchTask({ task, workspaceTitle, profileLabel, perspectiveLabel, matter });
 
     const startedAt = this.now();
     /** @type {any} */

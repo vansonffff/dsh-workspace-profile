@@ -45,6 +45,7 @@ import {
 import { createDefinition, updateDefinition } from '../subagent-registry.js';
 import { buildSkillCatalog } from '../skill-policy.js';
 import { probeInstructions } from '../instructions-probe.js';
+import { matchMatter } from '../matter-match.js';
 import {
   AGENTS_SECTION_NAME,
   AGENTS_SECTION_ORDER,
@@ -82,6 +83,7 @@ import {
 export function createOperations({
   getStore,
   getResolver,
+  getMatterResolver,
   getCatalog,
   getSkills,
   getAgents,
@@ -336,6 +338,53 @@ export function createOperations({
      *   the Workspace, and optionally a draft Profile/Perspective pair.
      * @returns {Promise<any>} the composed sections, or why they cannot be shown.
      */
+    /**
+     * Read the Matter a Workspace's directory sits inside, and compare it against
+     * this Workspace's configuration.
+     *
+     * Read-only by construction: it returns a comparison, and nothing here writes a
+     * Profile, a Perspective or a Matter. Applying a recommendation stays a user
+     * action in the Settings form — a plugin that silently re-pointed a Workspace
+     * because a file on disk changed would be making a professional judgement on
+     * the user's behalf.
+     *
+     * A Workspace whose directory holds no `matter.yaml` is not a failure. It
+     * answers `discovered: false`, which is what an ordinary project directory is.
+     *
+     * @param {any} args - `{ workspaceId }`.
+     * @returns {Promise<object>} the Matter facts, the comparison, and any problem.
+     */
+    async matter(args) {
+      const workspaceId = String(args?.workspaceId ?? '');
+      const workspace = getResolver().describe(workspaceId);
+      if (workspace === undefined) {
+        return { available: false, workspaceId, message: `workspace "${workspaceId}" is not registered` };
+      }
+
+      const matterResolver = getMatterResolver?.();
+      if (matterResolver === undefined) {
+        return { available: false, workspaceId, message: 'the Matter resolver is not mounted' };
+      }
+
+      const { facts, problem } = await matterResolver.resolvePath(workspace.path);
+      const { document } = readDocument();
+      const { policy } = resolveWorkspacePolicy(document, workspaceId, now());
+
+      return {
+        available: true,
+        workspaceId,
+        // `discovered` separates "this directory has no Matter" from "the read
+        // failed": both leave `matter` null, and the page must not call the first
+        // one an error.
+        discovered: facts !== null,
+        matter: facts,
+        problem,
+        match: matchMatter({ matter: { facts, problem }, policy }),
+        // Named so the page never has to guess what the stored values were.
+        policy: { profile: policy.profile, defaultPerspective: policy.defaultPerspective },
+      };
+    },
+
     async previewInjection(args) {
       const workspaceId = String(args?.workspaceId ?? '');
       const workspace = getResolver().describe(workspaceId);

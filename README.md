@@ -65,6 +65,7 @@ Workspace:
 | **Perspective** | the position this work is done from — e.g. 原告代理人 / 被告代理人 under Litigation, 管理人 / 债务人 / 投资人 under Bankruptcy |
 | **Skill policy** | which Skills agents in this Workspace may use: 推荐 / 可用 / 禁用 |
 | **Workspace Subagent** | a reusable definition: who does what class of subtask, with which model |
+| **Matter** | the CaseBench case this directory *is* — read from `matter.yaml`, compared with the Profile and Perspective, never written to |
 
 A Profile is a body of reviewable Markdown, not a label. A Perspective is a
 position, and the model is told in as many words that it is not a verified fact.
@@ -245,6 +246,9 @@ src/                 host half
   workspace-resolution.js  cwd → WorkspaceId
   session-perspective.js   the per-session stance, and its storage domain
   profile-runtime.js   the three injected prompt sections
+  matter-yaml.js       the matter.yaml subset reader (strict: it refuses, never guesses)
+  matter-resolution.js cwd → Matter Root, with a synchronous lookup for assemblies
+  matter-match.js      Matter type/role → Profile/Perspective, and the verdicts
   skill-policy.js      per-Agent Skill shadows
   model-catalog.js     route catalogue and preflight
   subagent-registry.js definitions, persona and dispatch-prompt compilers
@@ -255,7 +259,7 @@ client.js            the Settings section (classic script, no bundler)
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition
 test/                162 tests
-docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2
+docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2
 ```
 
 ## Requirements
@@ -301,6 +305,9 @@ node scripts/perspective-probe.mjs        # seeds and cleans up its own home
 - [`docs/MILESTONE-0.1.2.md`](docs/MILESTONE-0.1.2.md) — proving the prompt is
   really injected, the injection preview, and the two verdicts that used to be
   one.
+- [`docs/MILESTONE-0.2.md`](docs/MILESTONE-0.2.md) — Matter integration: reading a
+  CaseBench `matter.yaml`, comparing it with the Workspace, and why the reader
+  refuses rather than guesses.
 
 ## Licence
 

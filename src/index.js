@@ -47,6 +47,7 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths';
 
 import { CompositionStore, CompositionDocumentSchema, SETTINGS_NS } from './settings.js';
 import { WorkspaceResolver } from './workspace-resolution.js';
+import { MatterResolver } from './matter-resolution.js';
 import { ModelCatalog } from './model-catalog.js';
 import { ProfileRuntime, loadProfileTexts } from './profile-runtime.js';
 import { SkillPolicy, disabledSkillNames } from './skill-policy.js';
@@ -110,6 +111,10 @@ export function apply(ctx, config = {}) {
   const getSubagents = () => ctx.get('subagents');
 
   const resolver = new WorkspaceResolver({ getRegistry, logger });
+  // Resolves the CaseBench Matter a session sits inside. Its synchronous half is
+  // what the Settings read uses; nothing in the prompt sections depends on it, so a
+  // composition that never resolves one degrades to "no Matter" rather than failing.
+  const matterResolver = new MatterResolver({ logger });
   const catalog = new ModelCatalog({ getLlm, logger });
 
   /**
@@ -139,6 +144,10 @@ export function apply(ctx, config = {}) {
       pending = (async () => {
         const workspaceId = await resolver.resolveAgent(agent);
         await skillPolicy.applyFor(agent, workspaceId);
+        // Resolved at the same boundary as the Workspace, for the same reason: by
+        // the first step the synchronous answer is already memoised, and a
+        // delegation can read it without touching the filesystem.
+        await matterResolver.resolveAgent(agent);
       })().catch((error) => {
         logger?.warn?.(`workspace-profile: could not prepare the workspace context for an agent: ${messageOf(error)}`);
       });
@@ -184,6 +193,7 @@ export function apply(ctx, config = {}) {
   const dispatcher = new SubagentDispatcher({
     getSubagents,
     getResolver: () => resolver,
+    getMatterResolver: () => matterResolver,
     getStore,
     getCatalog: () => catalog,
     now,
@@ -193,6 +203,7 @@ export function apply(ctx, config = {}) {
   const operations = createOperations({
     getStore,
     getResolver: () => resolver,
+    getMatterResolver: () => matterResolver,
     getCatalog: () => catalog,
     getSkills,
     getAgents: () => ctx.get('agents'),
@@ -373,6 +384,7 @@ function messageOf(error) {
 
 export { SETTINGS_NS, WorkspaceProfileService };
 export { WorkspaceResolver } from './workspace-resolution.js';
+export { MatterResolver } from './matter-resolution.js';
 export { ModelCatalog } from './model-catalog.js';
 export { SubagentDispatcher } from './subagent-dispatch.js';
 export { CompositionStore } from './settings.js';

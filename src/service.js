@@ -73,6 +73,15 @@ export class WorkspaceProfileService extends TypertRemoteService {
   }
 
   /**
+   * @param {any} args - `{ workspaceId }`.
+   * @param {AbortSignal} signal - caller cancellation.
+   * @returns {Promise<any>} the Matter facts and the comparison against the policy.
+   */
+  remoteMatter(args, signal) {
+    return this.matter(args, signal);
+  }
+
+  /**
    * @param {AbortSignal} signal - caller cancellation.
    * @returns {Promise<any>} the model catalog.
    */

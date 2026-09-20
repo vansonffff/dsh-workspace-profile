@@ -698,6 +698,9 @@ async function renderSection({
   // The injection preview the Host would answer with. `null` means "not seeded";
   // an object is merged over the default fixture; a function receives the args.
   injection = null,
+  // The Matter read the Host would answer with. Default is "no matter.yaml here",
+  // which is what an ordinary project directory produces.
+  matter = null,
 } = {}) {
   const { entry, react, injected } = loadRenderableSection();
   const { ctx, registered } = makeClientHarness();
@@ -801,6 +804,11 @@ async function renderSection({
       const value = typeof injection === 'function' ? injection(args) : injection;
       return { ok: true, value };
     },
+    matter: async (args) => {
+      calls.push({ matter: args });
+      const value = typeof matter === 'function' ? matter(args) : matter;
+      return { ok: true, value: value ?? { available: true, discovered: false, matter: null, problem: null, match: null } };
+    },
     models: async () => ({ ok: true, value: { available: true, providers: [] } }),
     validateRoute: async () => ({ ok: true, value: { available: true } }),
     setSkillState: async (args) => { calls.push(args); return { ok: true, value: { saved: true, revision: 8, snapshot } }; },
@@ -870,10 +878,13 @@ test('the panel leads with the workspace picker, then three tabs', async () => {
   assert.equal(panels[0].props.id, 'workspace-profile-panel-workspace');
   assert.equal(panels[0].props['aria-labelledby'], 'workspace-profile-tab-workspace');
 
-  // The first tab holds the two configuration cards and the save bar, and no
-  // longer a workspace-selector block of its own.
+  // The first tab holds the configuration cards and the save bar, and no longer a
+  // workspace-selector block of its own. The list is exhaustive on purpose: a new
+  // card is a change to what this page says, so it should have to be added here.
+  // `matterTitle` comes second — the Matter the directory declares is read before
+  // the settings that are supposed to agree with it.
   const titles = allByClass(tree, 'wsp7k_cardTitle').map((e) => e.props.children);
-  assert.deepEqual(titles, ['blockType', 'blockNorms']);
+  assert.deepEqual(titles, ['blockType', 'matterTitle', 'blockNorms']);
   assert.ok(classes.includes('wsp7k_footer'), 'the save bar belongs to this tab');
 });
 
@@ -912,7 +923,10 @@ test('each field carries its own 查看 button, labelled 查看, and nothing res
   });
 
   const cards = allByClass(tree, 'wsp7k_card');
-  assert.equal(cards.length, 2, 'the workspace tab keeps its two cards');
+  // Three now: the Matter card reports what the directory declares, and the two
+  // below it are the settings that are supposed to agree with it. `cards[0]` is
+  // still the editable Profile/默认视角 card this test then walks.
+  assert.equal(cards.length, 3, 'the workspace tab keeps its configuration cards');
 
   // Two controls, one after each field, in document order: Profile then 默认视角.
   const ordered = walk(cards[0]);
@@ -1671,4 +1685,72 @@ test('no generated rule is followed by a stray comma', async () => {
   // comma in valid CSS, which makes this a precise invariant rather than a guess.
   assert.equal(/},/.test(css), false, 'a `},` means a comma escaped into a template literal');
   assert.ok(css.startsWith('.wsp7k_'), 'and the stylesheet still builds');
+});
+
+test('the Matter card reports what the directory declares, and whether we agree', async () => {
+  const { tree } = await renderSection({
+    vocabularyProfiles: [{ id: 'litigation', label: '诉讼 (Litigation)', perspectives: [{ id: 'none', label: '不设定' }, { id: 'plaintiff', label: '原告代理人' }] }],
+    policyProfile: 'litigation',
+    policyPerspective: 'plaintiff',
+    matter: {
+      available: true,
+      discovered: true,
+      problem: null,
+      matter: { id: '8a0be89b-6f7d-4ec3-9a14-130da6158a9a', name: '浦大公司系列案件', type: 'litigation', role: 'plaintiff', stage: 'unknown', modules: ['litigation.series'] },
+      match: {
+        profile: { expected: 'litigation', actual: 'litigation', verdict: 'match' },
+        perspective: { expected: 'plaintiff', workspaceDefault: 'plaintiff', sessionOverride: null, effective: 'plaintiff', verdict: 'match' },
+        problems: [],
+      },
+    },
+  });
+  const text = strings(tree).join('\u0000');
+  // Every field the Host read is shown, including the ones the page cannot derive.
+  assert.ok(text.includes('matterName') && text.includes('matterId') && text.includes('matterType'), 'the identity fields render');
+  assert.ok(text.includes('matterRole') && text.includes('matterStage') && text.includes('matterModules'), 'the classification fields render');
+  assert.ok(text.includes('8a0be89b-6f7d-4ec3-9a14-130da6158a9a'), 'the Matter id is shown verbatim');
+  assert.ok(text.includes('litigation.series'), 'modules are shown');
+  // The two verdicts, each its own row.
+  assert.ok(text.includes('matterProfileMatch') && text.includes('matterPerspectiveMatch'), 'both comparisons are shown');
+  assert.ok(text.includes('matterMatch'), 'an agreeing pair reads as a match');
+  // Nothing offers to apply it: v1 reports, it does not re-point the Workspace.
+  assert.ok(!text.includes('matterApply'), 'no apply affordance exists');
+});
+
+test('a workspace directory with no matter.yaml is not presented as an error', async () => {
+  const { tree } = await renderSection({ matter: { available: true, discovered: false, matter: null, problem: null, match: null } });
+  const text = strings(tree).join('\u0000');
+  assert.ok(text.includes('matterNone'), 'the ordinary case is stated plainly');
+  assert.ok(!text.includes('matterUnreadable'), 'absence is not an unreadable file');
+});
+
+test('an unreadable matter.yaml says why, rather than claiming there is none', async () => {
+  const { tree } = await renderSection({
+    matter: { available: true, discovered: false, matter: null, problem: 'line 2: anchors and aliases are not supported', match: null },
+  });
+  const text = strings(tree).join('\u0000');
+  assert.ok(text.includes('matterUnreadable'), 'the failure is named');
+  assert.ok(text.includes('anchors and aliases'), 'and the reason reaches the page');
+  assert.ok(!text.includes('matterNone'), 'a broken file must not read as "no matter here"');
+});
+
+test('a mismatch is reported as a mismatch, and changes nothing', async () => {
+  const { tree, calls } = await renderSection({
+    matter: {
+      available: true,
+      discovered: true,
+      problem: null,
+      matter: { id: 'x', name: '某案', type: 'bankruptcy', role: 'administrator', stage: 'unknown', modules: [] },
+      match: {
+        profile: { expected: 'bankruptcy', actual: 'general', verdict: 'mismatch' },
+        perspective: { expected: 'administrator', workspaceDefault: 'none', sessionOverride: null, effective: 'none', verdict: 'mismatch' },
+        problems: [],
+      },
+    },
+  });
+  const text = strings(tree).join('\u0000');
+  assert.ok(text.includes('matterMismatch'), 'the disagreement is shown');
+  // The read is a read: no savePolicy call was made on its behalf.
+  assert.deepEqual(calls.filter((call) => call.savePolicy !== undefined), []);
+  assert.ok(calls.some((call) => call.matter !== undefined), 'and it did ask the Host');
 });

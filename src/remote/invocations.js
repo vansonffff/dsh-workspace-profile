@@ -51,6 +51,12 @@ export const REMOTE_INVOCATIONS = Object.freeze([
    * from here.
    */
   { method: 'previewInjection', implementation: 'remotePreviewInjection', parameters: [{ name: 'args' }], cancellable: true },
+  /**
+   * Read the CaseBench Matter this Workspace's directory sits inside, and compare
+   * it against the stored configuration. Read-only: nothing here writes a Profile,
+   * a Perspective or a Matter.
+   */
+  { method: 'matter', implementation: 'remoteMatter', parameters: [{ name: 'args' }], cancellable: true },
   /** Provider / model / reasoning-effort catalog. */
   { method: 'models', implementation: 'remoteModels', parameters: [], cancellable: true },
   /** Non-throwing route verdict for one saved definition. */

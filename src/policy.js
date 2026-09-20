@@ -29,13 +29,14 @@ export const SCHEMA_VERSION = 1;
 export const SETTINGS_NS = 'workspace-profile';
 
 /** Profile ids, in the order the Settings page offers them. */
-export const PROFILE_IDS = Object.freeze(['general', 'litigation', 'bankruptcy']);
+export const PROFILE_IDS = Object.freeze(['general', 'litigation', 'bankruptcy', 'non-litigation']);
 
 /** Human-facing Profile labels (zh-CN primary, matching the product's locale). */
 export const PROFILE_LABELS = Object.freeze({
   general: '通用 (General)',
   litigation: '诉讼 (Litigation)',
   bankruptcy: '破产重整 (Bankruptcy)',
+  'non-litigation': '非诉 (Non-litigation)',
 });
 
 /**
@@ -63,6 +64,8 @@ export const PERSPECTIVES_BY_PROFILE = Object.freeze({
     'third-party',
     'appellant',
     'respondent',
+    'applicant',
+    'respondent-to-application',
   ]),
   bankruptcy: Object.freeze([
     'none',
@@ -71,6 +74,24 @@ export const PERSPECTIVES_BY_PROFILE = Object.freeze({
     'investor',
     'creditor',
     'restructuring-advisor',
+  ]),
+  // Non-litigation. The ids are deliberately distinct from Bankruptcy's: a
+  // `debtor` inside a proceeding and a `debtor` outside one are different jobs,
+  // and this table's own rule is that an id means the same thing wherever it
+  // appears. Sharing them would also let a matter that moves from out-of-court
+  // into a proceeding keep its stored stance and silently swap the injected
+  // text; the transition should force a new choice, not hide itself.
+  //
+  // `-oc` is short for "out of court": the id is what gets typed at
+  // `/perspective`, so it is abbreviated, while the label below spells the
+  // meaning out. `/perspective` with no argument lists every id with its label,
+  // which is the discoverable form of this abbreviation.
+  'non-litigation': Object.freeze([
+    'none',
+    'debtor-oc',
+    'creditor-oc',
+    'investor-oc',
+    'advisor-oc',
   ]),
 });
 
@@ -91,12 +112,19 @@ export const PERSPECTIVE_LABELS = Object.freeze({
   'third-party': '第三人 (Third party)',
   appellant: '上诉人 (Appellant)',
   respondent: '被上诉人 (Respondent)',
+  applicant: '再审申请人 (Applicant for retrial)',
+  'respondent-to-application': '再审被申请人 (Respondent to retrial application)',
   // Bankruptcy
   administrator: '管理人 (Administrator)',
   debtor: '债务人 (Debtor)',
   investor: '投资人 (Investor)',
   creditor: '债权人 (Creditor)',
   'restructuring-advisor': '重整顾问 (Restructuring advisor)',
+  // Non-litigation
+  'debtor-oc': '债务人 · 庭外重组 (Debtor, out of court)',
+  'creditor-oc': '债权人 · 庭外重组 (Creditor, out of court)',
+  'investor-oc': '投资方 · 并购 / 尽调 / 投资 (Investor, out of court)',
+  'advisor-oc': '顾问 · 非诉 (Advisor, out of court)',
 });
 
 /** Onboarding lifecycle states. v0.1 recognises `skipped` but never produces it. */
@@ -135,6 +163,12 @@ export const PROFILE_RECOMMENDED_SKILLS = Object.freeze({
     'prc-legal-research-case-search',
     'prc-legal-research-law-search',
     'prc-legal-research-company-search',
+  ]),
+  'non-litigation': Object.freeze([
+    'legal-case-bench',
+    'prc-legal-research-law-search',
+    'prc-legal-research-company-search',
+    'prc-legal-research-case-search',
   ]),
 });
 

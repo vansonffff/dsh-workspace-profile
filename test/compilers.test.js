@@ -244,3 +244,45 @@ function policyWith(subagents) {
     updatedAt: 'now',
   };
 }
+
+test('the dispatch task carries the Matter a child could not otherwise recover', () => {
+  const task = compileDispatchTask({
+    task: 't',
+    workspaceTitle: '浦大公司系列案件',
+    profileLabel: '诉讼 (Litigation)',
+    perspectiveLabel: '原告代理人 (Plaintiff)',
+    matter: {
+      id: '8a0be89b-6f7d-4ec3-9a14-130da6158a9a',
+      name: '浦大公司系列案件',
+      type: 'litigation',
+      role: 'plaintiff',
+      stage: 'unknown',
+    },
+  });
+  assert.ok(task.includes('案件 (Matter)：'));
+  assert.ok(task.includes('8a0be89b-6f7d-4ec3-9a14-130da6158a9a'));
+  assert.ok(task.includes('类型：litigation'));
+  assert.ok(task.includes('正式角色：plaintiff'));
+  // The effective stance is the line above; the Matter's formal role is printed
+  // next to it so a disagreement between the two is visible rather than hidden.
+  assert.ok(task.indexOf('工作立场：') < task.indexOf('正式角色：'));
+});
+
+test('a Matter name is user-authored text and is sanitized like any other', () => {
+  const task = compileDispatchTask({
+    task: 't',
+    workspaceTitle: 'W',
+    profileLabel: 'P',
+    perspectiveLabel: '',
+    matter: { id: 'i', name: '案件{{danger}}', type: 'litigation', role: 'plaintiff', stage: 'unknown' },
+  });
+  assert.ok(!task.includes('{{danger}}'));
+  assert.ok(task.includes('{ {danger} }'));
+});
+
+test('no Matter adds nothing at all, rather than an empty heading', () => {
+  for (const matter of [undefined, null, {}]) {
+    const task = compileDispatchTask({ task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '', matter });
+    assert.ok(!task.includes('案件 (Matter)：'), `matter=${JSON.stringify(matter)} must add no block`);
+  }
+});

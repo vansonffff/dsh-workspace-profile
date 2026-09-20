@@ -22,15 +22,17 @@ weakened here.
 ## 2. Where the text lives
 
 ```
-profiles/general.md
-profiles/litigation.md
-profiles/bankruptcy.md
-perspectives/bankruptcy/administrator.md
-perspectives/bankruptcy/debtor.md
-perspectives/bankruptcy/investor.md
-perspectives/bankruptcy/creditor.md
-perspectives/bankruptcy/restructuring-advisor.md
+profiles/<profile>.md                    one per Profile id
+perspectives/<profile>/<perspective>.md  one per vocabulary id, `none` excepted
 ```
+
+The **file layout mirrors the tables in `src/policy.js`** (`PROFILE_IDS`,
+`PERSPECTIVES_BY_PROFILE`), which are the source of truth. This list used to be
+enumerated here and went stale when the Litigation Perspectives were added; the
+loader derives its paths from those tables, so the tables and the files must agree
+and a hand-copied list can only drift. To see what is actually loaded, read the
+tables — or run `loadProfileTexts`, which reports a missing file as a warning and
+an empty body.
 
 Markdown files beside the code, read once at activation, served from memory. A
 change to what the model is told is therefore a reviewable change to a document
@@ -103,8 +105,11 @@ being asked from the other side.
 
 ## 7. Business rules on the Profile/Perspective pair
 
-- `general` and `litigation` accept only `none`.
-- `bankruptcy` accepts all six Perspective ids.
+- A Profile accepts exactly the ids in its own `PERSPECTIVES_BY_PROFILE` row, and
+  refuses every other Profile's — including ids that exist elsewhere in the plugin.
+  That table is the source of truth; this section deliberately does not restate the
+  ids, because a restated list is what went stale here before.
+- `general` offers only `none`: a domain without positions must not offer a stance.
 - An impossible stored pair is **repaired toward safety** on read (Profile falls
   back to `general`, Perspective to `none`) rather than injected as-is; the
   Settings page keeps showing the stored record so the repair is visible.

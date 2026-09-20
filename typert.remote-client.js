@@ -28,6 +28,7 @@ export function buildClientDescriptors(schema) {
     { method: 'snapshot', implementation: 'remoteSnapshot', parameters: [], cancellable: true },
     { method: 'skills', implementation: 'remoteSkills', parameters: [{ name: 'args' }], cancellable: true },
     { method: 'previewInjection', implementation: 'remotePreviewInjection', parameters: [{ name: 'args' }], cancellable: true },
+    { method: 'matter', implementation: 'remoteMatter', parameters: [{ name: 'args' }], cancellable: true },
     { method: 'models', implementation: 'remoteModels', parameters: [], cancellable: true },
     { method: 'validateRoute', implementation: 'remoteValidateRoute', parameters: [{ name: 'args' }], cancellable: true },
     { method: 'savePolicy', implementation: 'remoteSavePolicy', parameters: [{ name: 'args' }] },
