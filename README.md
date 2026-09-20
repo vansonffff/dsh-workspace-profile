@@ -271,8 +271,23 @@ half is plain ESM with JSDoc, and the browser half is a classic script that
 
 ## Tests
 
+`src/` and the tests import `@deepseek-ai/dsh-*` — the platform packages, which DSH
+provides rather than this plugin depending on them. `node_modules/` is gitignored,
+so **a fresh clone has none of them and seven test files cannot even load**. Link
+them from a DSH installation first:
+
 ```bash
-node --test "test/*.test.js"
+node scripts/link-platform-deps.mjs                      # ~/.dsh/profiles/node_modules
+node scripts/link-platform-deps.mjs --from /path/to/node_modules
+node scripts/link-platform-deps.mjs --check              # report, change nothing
+```
+
+It links exactly what the sources and tests import (12 packages today) and fails
+loudly on any it cannot find, so it cannot paper over a dependency that was never
+declared. Then:
+
+```bash
+node --test "test/*.test.js"                             # 198 tests
 ```
 
 Probes that need a real booted composition. They each **require** an explicit
@@ -288,6 +303,7 @@ node scripts/remote-probe.mjs snapshot --home /tmp/dsh-probe-home
 node scripts/prompt-probe.mjs --home /tmp/dsh-probe-home --cwd /your/workspace
 node scripts/perspective-probe.mjs        # seeds and cleans up its own home
 node scripts/matter-probe.mjs --workspace /your/case/workspace   # read-only
+node scripts/matter-yaml-golden.py       # needs Python + PyYAML; see --help
 ```
 
 ## Documentation
