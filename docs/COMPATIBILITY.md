@@ -40,6 +40,27 @@ Two consequences worth stating:
   *not* relied on — `procedure.stage` among them, whose vocabulary is not frozen
   upstream.
 
+### This consumer is slightly stricter than CaseBench's own validator
+
+Two places where this reader refuses a document that CaseBench's validator would
+accept. Neither affects anything CaseBench's own writer or migration produces, so
+neither is a defect today; they are recorded so the difference is a known one
+rather than a surprise:
+
+| | CaseBench accepts | This reader requires |
+| --- | --- | --- |
+| `matter.id` | a UUID | a canonical lowercase UUID |
+| `engagement.role` | possibly absent | present, and in the frozen role vocabulary |
+
+Both exist because this side cannot repair what it reads. CaseBench can normalise
+a hand-written file on its next write; a consumer that quietly filled in a missing
+role would be inventing a stance for a live matter, which is the one thing the
+Formal-Role-vs-Effective-Perspective split exists to prevent.
+
+The difference would only matter if CaseBench were to accept a legal-but-not-
+canonical `matter.yaml` written by a third party. It does not today, and this is
+where to look first if that changes.
+
 ## 1. Seam summary
 
 | # | Seam | Verdict | Mechanism used |
