@@ -1,0 +1,54 @@
+{
+  "bindings": {
+    "court": "SH-03",
+    "nested": {
+      "deep": {
+        "deeper": "value"
+      }
+    }
+  },
+  "engagement": {
+    "represented_party": null,
+    "role": "administrator"
+  },
+  "governance": {
+    "case_tier": null
+  },
+  "jurisdiction": {
+    "city": null,
+    "country": null,
+    "court": "上海三中院",
+    "province": null
+  },
+  "matter": {
+    "aliases": [
+      "别名一",
+      "alias-two"
+    ],
+    "code": null,
+    "id": "11111111-2222-3333-4444-555555555555",
+    "name": "含'单引号'与\"双引号\"的案名",
+    "status": "active",
+    "subtypes": [],
+    "type": "bankruptcy"
+  },
+  "metadata": {
+    "count": 42,
+    "created_at": "2026-09-19T07:27:01+08:00",
+    "created_by": "dsh",
+    "empty_list": [],
+    "empty_map": {},
+    "flag": true,
+    "nothing": null,
+    "updated_at": "2026-09-19T07:27:01+08:00"
+  },
+  "modules": [
+    "bankruptcy.real-estate",
+    "bankruptcy.construction"
+  ],
+  "procedure": {
+    "kind": "reorganization",
+    "stage": "claim-review"
+  },
+  "schema_version": 1
+}

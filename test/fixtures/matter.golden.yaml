@@ -1,0 +1,41 @@
+schema_version: 1
+matter:
+  id: 11111111-2222-3333-4444-555555555555
+  code: null
+  name: 含'单引号'与"双引号"的案名
+  aliases:
+  - 别名一
+  - alias-two
+  type: bankruptcy
+  subtypes: []
+  status: active
+jurisdiction:
+  country: null
+  province: null
+  city: null
+  court: 上海三中院
+engagement:
+  role: administrator
+  represented_party: null
+procedure:
+  kind: reorganization
+  stage: claim-review
+governance:
+  case_tier: null
+modules:
+- bankruptcy.real-estate
+- bankruptcy.construction
+bindings:
+  court: SH-03
+  nested:
+    deep:
+      deeper: value
+metadata:
+  created_at: '2026-09-19T07:27:01+08:00'
+  updated_at: '2026-09-19T07:27:01+08:00'
+  created_by: dsh
+  count: 42
+  flag: true
+  nothing: null
+  empty_list: []
+  empty_map: {}

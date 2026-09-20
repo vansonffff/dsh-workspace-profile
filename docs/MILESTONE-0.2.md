@@ -47,16 +47,25 @@ wrong `type` or `role` — and a wrong role silently selects the wrong professio
 stance for a live matter. Refusing turns that into "no Matter", which the page can
 state honestly.
 
-Measured, not assumed:
+Measured, not assumed — and **reproducible from this repository**, which the
+first version of this document could not honestly claim:
 
 ```
-6 real matter.yaml files, parsed by PyYAML and by this reader   identical, field by field
-a fixture with non-empty lists, deep nesting, quotes, bools,
-ints, null, empty collections                                   identical, field by field
+test/fixtures/matter.golden.yaml   real PyYAML 6.0.3 safe_dump output
+test/fixtures/matter.golden.json   what PyYAML parsed that text back to
+   asserted equal to this reader's answer   →  a golden fixture, not a hand-written one
+   regenerate: python3 scripts/matter-yaml-golden.py [--pyyaml <dir>]
+
 14 shapes outside the subset (anchors, aliases, tags, multiple
 documents, flow collections with content, tabs, block scalars,
-inline comments, duplicate keys, …)                             each refused by name
-whole-line comments and blank lines                             ignored, not refused
+inline comments, duplicate keys, …)        each refused by name, in unit tests
+whole-line comments and blank lines        ignored, not refused
+
+node scripts/matter-probe.mjs --workspace <real workspace>
+   reads every matter.yaml and prints what was found; exit 0 = all mapped
+   --json emits the same answer for diffing against PyYAML (the recipe is in
+   the script's header, and it was run: six live matters, field for field
+   identical)
 ```
 
 ## The mapping, and why it is a table
@@ -152,14 +161,15 @@ caught the first two omissions immediately, which is exactly what they are for.
 ## Verification
 
 ```
-node --test "test/*.test.js"     196 tests, all passing (was 162 before this round)
+node --test "test/*.test.js"     197 tests, all passing (was 162 before this round)
                                     +6  matter-yaml    the subset reader, both halves
                                     +21 matter-match   discovery, mapping, verdicts
                                     +3  compilers      the dispatch Matter block
                                     +4  client-bundle  the Matter card
 ```
 
-Against the real corpus: the six live matters in the working workspace were read
-end to end — discovered, parsed, mapped and compared — and each maps to a pair the
-plugin offers. A Workspace configured from its Matter reports `match/match`; the
-same Matter against a different Workspace reports `mismatch/mismatch`.
+Against the real corpus, via the probe (not via a one-off script that leaves no
+trace): the six live matters in the working workspace were read end to end —
+discovered, parsed, mapped and compared — and each maps to a pair the plugin
+offers. A Workspace configured from its Matter reports `match/match`; the same
+Matter against a different Workspace reports `mismatch/mismatch`.

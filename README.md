@@ -257,8 +257,9 @@ src/                 host half
   remote/              the business operations behind the browser surface
 client.js            the Settings section (classic script, no bundler)
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
-scripts/             probes that run against a real booted composition
-test/                162 tests
+scripts/             probes that run against a real booted composition, plus
+                       matter-probe.mjs and matter-yaml-golden.py for the Matter reader
+test/                197 tests, and fixtures/ holding the PyYAML golden pair
 docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2
 ```
 
@@ -286,6 +287,7 @@ node scripts/boot-probe.mjs   --home /tmp/dsh-probe-home
 node scripts/remote-probe.mjs snapshot --home /tmp/dsh-probe-home
 node scripts/prompt-probe.mjs --home /tmp/dsh-probe-home --cwd /your/workspace
 node scripts/perspective-probe.mjs        # seeds and cleans up its own home
+node scripts/matter-probe.mjs --workspace /your/case/workspace   # read-only
 ```
 
 ## Documentation

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { MatterYamlError, parseMatterYaml } from '../src/matter-yaml.js';
@@ -10,11 +11,14 @@ import { MatterYamlError, parseMatterYaml } from '../src/matter-yaml.js';
 // professional stance for a live matter.
 
 test('reads the shape CaseBench writes', () => {
-  // Produced by PyYAML `safe_dump(..., default_flow_style=False, sort_keys=False)`,
-  // which is what `matter_io._dump_yaml` calls. Note the block sequences sitting at
-  // the *same* indent as their key — that is PyYAML's default, not a quirk of the
-  // fixture, and a parser that required deeper indentation would reject every real
-  // file that has a non-empty list.
+  // A hand-written transcription of the shape PyYAML `safe_dump(...,
+  // default_flow_style=False, sort_keys=False)` emits — which is what
+  // `matter_io._dump_yaml` calls. It is here because it reads as a document,
+  // one case at a time; the *genuine* PyYAML output is `fixtures/matter.golden.*`,
+  // asserted against below. Note the block sequences sitting at the *same* indent
+  // as their key: that is PyYAML's default, not a quirk of this fixture, and a
+  // parser requiring deeper indentation would reject every real file with a
+  // non-empty list.
   const text = [
     'schema_version: 1',
     'matter:',
@@ -61,6 +65,22 @@ test('reads the shape CaseBench writes', () => {
   assert.equal(doc.metadata.count, 42);
   assert.equal(doc.metadata.flag, true);
   assert.equal(doc.metadata.nested.deeper, 'value');
+});
+
+test('reads a golden fixture that PyYAML itself produced', async () => {
+  // The strongest statement this reader can make is not "it handles the shapes I
+  // thought of" but "it agrees with the writer". These two files are a real pair:
+  // `matter.golden.yaml` is PyYAML 6.0.3 `safe_dump` output, and
+  // `matter.golden.json` is what PyYAML parsed that same document to. The expected
+  // value is the writer's own answer, not this plugin's opinion of it.
+  //
+  // Regenerate with `python3 scripts/matter-yaml-golden.py` after any change to
+  // what this reader accepts; the fixture must never be hand-edited.
+  const [yamlText, expectedText] = await Promise.all([
+    readFile(new URL('./fixtures/matter.golden.yaml', import.meta.url), 'utf8'),
+    readFile(new URL('./fixtures/matter.golden.json', import.meta.url), 'utf8'),
+  ]);
+  assert.deepEqual(parseMatterYaml(yamlText), JSON.parse(expectedText));
 });
 
 test('single quotes inside a single-quoted scalar are doubled, not terminated', () => {
