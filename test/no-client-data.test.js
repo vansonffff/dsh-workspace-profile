@@ -5,9 +5,23 @@
  *
  * This repository is published. A list of the real matters would be exactly the
  * thing the test exists to prevent, so the names are read at run time from the
- * private case workspace and never committed. When that workspace is absent — a
- * fresh clone, CI, a reviewer's machine — the test skips rather than pretending to
- * have checked.
+ * private case workspace and never committed.
+ *
+ * ## Absent data is a skip, and on a release it is a failure
+ *
+ * When the private workspace is not on this machine there is nothing to check
+ * against. Returning quietly would report **pass** — a green tick on a check that
+ * ran nothing — so the test skips, and the report says so. A skip is honest; a
+ * silent pass is not.
+ *
+ * That still leaves the release path: publishing from a machine with no client
+ * data would skip this check and ship unexamined. `RELEASE_CHECK=1` turns the skip
+ * into a failure, so a release either checks or refuses.
+ *
+ * ```bash
+ * node --test "test/*.test.js"                    # skips without the workspace
+ * RELEASE_CHECK=1 node --test "test/*.test.js"    # fails without it
+ * ```
  *
  * ## What it catches, and what it does not
  *
@@ -19,9 +33,6 @@
  *
  * (Writing this file is how the gap was found: the first draft used a real name and
  * a real id as its own illustration, and this test — run against itself — failed.)
- *
- * So the rule is the one the guard cannot enforce: **do not write a client's name
- * in this repository at all.** This only catches the copy-paste.
  */
 
 import assert from 'node:assert/strict';
@@ -29,28 +40,28 @@ import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-const REPO = new URL('..', import.meta.url);
+const REPO = fileURLToPath(new URL('..', import.meta.url));
 const WORKSPACE = join(homedir(), 'Documents', 'My Legal-agents');
 
 /** Directories never worth walking. */
 const SKIP = new Set(['.git', 'node_modules']);
 
 /** Extensions that can carry a copied name. */
-const TEXT = new Set(['.md', '.js', '.mjs', '.json', '.yaml', '.yml', '.py', '.txt']);
+const TEXT = new Set(['.md', '.mjs', '.js', '.json', '.yaml', '.yml', '.py', '.txt']);
 
 /**
  * Walk the repository, skipping the directories that hold no authored text.
  *
- * @param {URL} root - the directory to walk.
+ * @param {string} root - the directory to walk.
  * @returns {Promise<string[]>} absolute file paths.
  */
 async function walk(root) {
   const found = [];
-  const entries = await readdir(root, { withFileTypes: true });
-  for (const entry of entries) {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
     if (SKIP.has(entry.name)) continue;
-    const child = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, root);
+    const child = join(root, entry.name);
     if (entry.isDirectory()) {
       found.push(...(await walk(child)));
     } else if (TEXT.has(entry.name.slice(entry.name.lastIndexOf('.')))) {
@@ -60,43 +71,42 @@ async function walk(root) {
   return found;
 }
 
-test('no real matter name or id appears in this repository', async () => {
+test('no real matter name or id appears in this repository', async (t) => {
   let registry;
   try {
     registry = JSON.parse(await readFile(join(WORKSPACE, '_registry.json'), 'utf8'));
   } catch {
-    // No private workspace on this machine. Skip rather than assert nothing —
-    // a test that silently passes when it checked nothing is not a guard.
+    const why = `the private case workspace is not at ${WORKSPACE}, so there is no deny-list to check against`;
+    if (process.env.RELEASE_CHECK === '1') {
+      assert.fail(`${why} — and RELEASE_CHECK=1 means a release must check, not skip`);
+    }
+    t.skip(why);
     return;
   }
+
   const matters = Array.isArray(registry.matters) ? registry.matters : [];
   assert.ok(matters.length > 0, 'the workspace registry lists no matters');
 
+  /** @type {Array<{ needle: string, kind: string }>} */
   const needles = [];
   for (const matter of matters) {
-    if (typeof matter.name === 'string' && matter.name !== '') needles.push(matter.name);
-    if (typeof matter.matter_id === 'string' && matter.matter_id !== '') needles.push(matter.matter_id);
+    if (typeof matter.name === 'string' && matter.name !== '') {
+      needles.push({ needle: matter.name, kind: 'name' });
+    }
+    if (typeof matter.matter_id === 'string' && matter.matter_id !== '') {
+      needles.push({ needle: matter.matter_id, kind: 'id' });
+    }
   }
 
   const leaks = [];
   for (const file of await walk(REPO)) {
     const text = await readFile(file, 'utf8').catch(() => '');
-    for (const needle of needles) {
+    for (const { needle, kind } of needles) {
       if (text.includes(needle)) {
-        leaks.push(`${relative(new URL('.', REPO).pathname, file.pathname)} contains a real matter ${needle === matterName(needle, matters) ? 'name' : 'id'}`);
+        const line = text.split('\n').findIndex((entry) => entry.includes(needle)) + 1;
+        leaks.push(`${relative(REPO, file)}:${line} contains a real matter ${kind} — ${needle}`);
       }
     }
   }
   assert.deepEqual(leaks, [], `real client data must not be committed:\n  ${leaks.join('\n  ')}`);
 });
-
-/**
- * Whether a needle is a name rather than an id, for the message only.
- *
- * @param {string} needle - the matched string.
- * @param {Array<{name?: string}>} matters - the registry entries.
- * @returns {string|undefined} the name when it matches one.
- */
-function matterName(needle, matters) {
-  return matters.some((matter) => matter.name === needle) ? needle : undefined;
-}

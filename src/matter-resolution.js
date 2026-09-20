@@ -31,12 +31,16 @@
  */
 
 import { lstat, readFile } from 'node:fs/promises';
-import { dirname, join, parse as parsePath, resolve } from 'node:path';
+import { dirname, join, parse as parsePath, resolve, sep } from 'node:path';
 
 import { MatterYamlError, parseMatterYaml } from './matter-yaml.js';
+import { validateMatterDocument, validateMatterState } from './matter-contract.js';
 
 /** The Contract file's name, fixed by CaseBench. */
 export const MATTER_FILENAME = 'matter.yaml';
+
+/** The case state that carries the matching `matter_id`, fixed by CaseBench. */
+export const STATE_FILENAME = '_case_state.json';
 
 /** Upper bound on the upward walk, so a pathological path cannot loop. */
 const MAX_DEPTH = 64;
@@ -68,7 +72,7 @@ const MAX_DEPTH = 64;
  */
 export async function findMatter(start, options = {}) {
   const maxDepth = options.maxDepth ?? MAX_DEPTH;
-  const found = await findMatterFile(start, maxDepth);
+  const found = await findMatterFile(start, maxDepth, options.workspaceRoot);
   if (found.problem !== null) return { facts: null, problem: found.problem };
   if (found.path === null) return { facts: null, problem: null };
 
@@ -89,10 +93,36 @@ export async function findMatter(start, options = {}) {
     return { facts: null, problem: `${MATTER_FILENAME} 无法解析：${why}` };
   }
 
-  const matter = isMapping(document.matter) ? document.matter : {};
-  const id = typeof matter.id === 'string' ? matter.id.trim() : '';
-  if (id === '') {
-    return { facts: null, problem: `${MATTER_FILENAME} 缺少 matter.id` };
+  // Syntax was checked above; this is the Contract. A document that CaseBench
+  // would have refused to write must not become a confident, ordinary-looking
+  // answer here — `type: nonsense` falling back to `general` is exactly the
+  // failure the strict reader exists to prevent, one level up.
+  const problems = validateMatterDocument(document);
+  if (problems.length > 0) {
+    return { facts: null, problem: `${MATTER_FILENAME} 不符合 CaseBench Contract：${problems.join('；')}` };
+  }
+
+  const matter = document.matter;
+  const id = matter.id;
+
+  // `matter.yaml` alone is not the identity: CaseBench treats the pair as the
+  // contract and hard-stops when they disagree, so telling a child "you are
+  // working on Matter AAA" while the state says BBB would be a false statement
+  // about a live matter.
+  const statePath = join(dirname(found.path), STATE_FILENAME);
+  let state;
+  try {
+    state = JSON.parse(await readFile(statePath, 'utf8'));
+  } catch (error) {
+    if (error !== null && typeof error === 'object' && error.code === 'ENOENT') {
+      state = undefined;
+    } else {
+      return { facts: null, problem: `无法读取 ${STATE_FILENAME}：${messageOf(error)}` };
+    }
+  }
+  const stateProblems = validateMatterState({ state, matterId: id });
+  if (stateProblems.length > 0) {
+    return { facts: null, problem: stateProblems.join('；') };
   }
 
   const engagement = isMapping(document.engagement) ? document.engagement : {};
@@ -103,9 +133,10 @@ export async function findMatter(start, options = {}) {
       root: dirname(found.path),
       path: found.path,
       id,
-      name: typeof matter.name === 'string' && matter.name !== '' ? matter.name : id,
-      type: stringOr(matter.type, 'unclassified'),
-      role: stringOr(engagement.role, 'unknown'),
+      // Guaranteed valid by the Contract check above; nothing here is a fallback.
+      name: matter.name,
+      type: matter.type,
+      role: engagement.role,
       stage: stringOr(procedure.stage, 'unknown'),
       modules: Array.isArray(document.modules)
         ? document.modules.filter((entry) => typeof entry === 'string')
@@ -124,10 +155,26 @@ export async function findMatter(start, options = {}) {
  * @param {number} maxDepth - how many levels to try.
  * @returns {Promise<{ path: string|null, problem: string|null }>} the file, or why not.
  */
-export async function findMatterFile(start, maxDepth = MAX_DEPTH) {
+export async function findMatterFile(start, maxDepth = MAX_DEPTH, workspaceRoot = undefined) {
   const resolved = resolve(start);
+
+  // The upward walk stops at the Workspace root, never above it. CaseBench's own
+  // rule is "up to the workspace root, do not cross the boundary", and crossing it
+  // is not a theoretical concern: a Workspace that is an ordinary project
+  // directory sitting inside a directory that happens to hold a `matter.yaml`
+  // would otherwise be adopted as that Matter, and every session in it would be
+  // told it was working on someone else's case.
+  const boundary = typeof workspaceRoot === 'string' && workspaceRoot !== ''
+    ? resolve(workspaceRoot)
+    : undefined;
+  if (boundary !== undefined && !isWithin(boundary, resolved)) {
+    // The session is not inside its own Workspace, which the Workspace resolver
+    // should have prevented. Refuse rather than walk somewhere unbounded.
+    return { path: null, problem: null };
+  }
+
   let directory = resolved;
-  const stop = parsePath(directory).root;
+  const stop = boundary ?? parsePath(directory).root;
 
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const candidate = join(directory, MATTER_FILENAME);
@@ -138,7 +185,18 @@ export async function findMatterFile(start, maxDepth = MAX_DEPTH) {
       // requires a real file here, and a link is how one Matter Root comes to
       // impersonate another.
       info = await lstat(candidate);
-    } catch {
+    } catch (error) {
+      // "Not there" and "cannot tell" are different answers. Collapsing every
+      // failure into absence would let a candidate that is unreadable — a
+      // permission error, an I/O error — send the walk *upward*, where it may
+      // find a different Matter and attribute this session to that one. An
+      // unreadable candidate is a stop, not a step.
+      if (!isMissing(error)) {
+        return {
+          path: null,
+          problem: `无法检查 ${candidate}：${messageOf(error)}`,
+        };
+      }
       info = null;
     }
     if (info !== null) {
@@ -159,6 +217,36 @@ export async function findMatterFile(start, maxDepth = MAX_DEPTH) {
 }
 
 /**
+ * Whether a filesystem error means "there is nothing at this path".
+ *
+ * Only these two. Anything else — `EACCES`, `EPERM`, `EIO`, a failed mount — is a
+ * failure to determine the answer, and the caller must not read it as absence.
+ *
+ * @param {unknown} error - the caught value.
+ * @returns {boolean} whether it means the path does not exist.
+ */
+export function isMissing(error) {
+  const code = error !== null && typeof error === 'object' ? error.code : undefined;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
+ * Whether `path` is `root` itself or lies beneath it.
+ *
+ * A string-prefix test would be wrong at the boundary: `/work/matter-old` starts
+ * with `/work/matter` but is a sibling, not a child. Comparing whole segments is
+ * what makes the difference.
+ *
+ * @param {string} root - the resolved ancestor.
+ * @param {string} path - the resolved candidate.
+ * @returns {boolean} whether `path` is inside `root`.
+ */
+export function isWithin(root, path) {
+  if (path === root) return true;
+  return path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+}
+
+/**
  * Resolve Matters for Agents, with a synchronous read for prompt assembly.
  *
  * Mirrors `WorkspaceResolver`: one asynchronous resolution per Agent at creation,
@@ -171,12 +259,17 @@ export class MatterResolver {
    * @param {(path: string, options?: object) => Promise<{facts: MatterFacts|null, problem: string|null}>} [deps.find]
    *   the discovery function, injectable for tests.
    */
-  constructor({ logger, find } = {}) {
+  constructor({ logger, find, workspacePathFor } = {}) {
     /** @private */ this.logger = logger;
     /** @private */ this.find = find ?? findMatter;
+    /** @private */
+    // Resolves the Agent's Workspace directory, which bounds the upward walk. When
+    // absent the walk is unbounded — correct for the Settings read, which passes
+    // the Workspace path as its own start, and never correct for an Agent.
+    this.workspacePathFor = workspacePathFor;
     /** @private @type {WeakMap<object, {facts: MatterFacts|null, problem: string|null}>} */
     this.agentIndex = new WeakMap();
-    /** @private @type {Map<string, Promise<{facts: MatterFacts|null, problem: string|null}>>} */
+    /** @private @type {Map<string, Promise<{facts: MatterFacts|null, problem: string|null}>>} keyed by path + boundary */
     this.pending = new Map();
   }
 
@@ -208,7 +301,15 @@ export class MatterResolver {
       if (agent !== null && typeof agent === 'object') this.agentIndex.set(agent, answer);
       return answer;
     }
-    const answer = await this.resolvePath(cwd);
+    let boundary;
+    try {
+      boundary = this.workspacePathFor?.(agent);
+    } catch (error) {
+      this.logger?.warn?.(
+        `workspace-profile: could not resolve the Workspace path bounding a Matter lookup (${messageOf(error)})`,
+      );
+    }
+    const answer = await this.resolvePath(cwd, boundary);
     if (agent !== null && typeof agent === 'object') this.agentIndex.set(agent, answer);
     return answer;
   }
@@ -219,13 +320,16 @@ export class MatterResolver {
    * @param {string} path - an absolute directory.
    * @returns {Promise<{facts: MatterFacts|null, problem: string|null}>} the answer.
    */
-  async resolvePath(path) {
-    const existing = this.pending.get(path);
+  async resolvePath(path, workspaceRoot = undefined) {
+    // The boundary is part of the question, so it is part of the key: the same
+    // directory under two Workspaces is two different answers.
+    const key = `${path}\u0000${workspaceRoot ?? ''}`;
+    const existing = this.pending.get(key);
     if (existing !== undefined) return existing;
 
     const work = (async () => {
       try {
-        return await this.find(path);
+        return await this.find(path, workspaceRoot === undefined ? {} : { workspaceRoot });
       } catch (error) {
         // A directory that is gone is not a fault worth a stack; it is a session
         // whose Matter cannot be determined.
@@ -234,11 +338,11 @@ export class MatterResolver {
       }
     })();
 
-    this.pending.set(path, work);
+    this.pending.set(key, work);
     try {
       return await work;
     } finally {
-      this.pending.delete(path);
+      this.pending.delete(key);
     }
   }
 }

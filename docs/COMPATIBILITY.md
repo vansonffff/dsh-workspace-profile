@@ -24,6 +24,22 @@ Two rules were applied throughout:
 - **A probe that has not failed on a known-bad input has not been shown to
   work.** Each seam's probe has a negative control, listed with it.
 
+## CaseBench — the upstream this consumes
+
+This plugin reads CaseBench's Matter Contract; it does not own it, and it does not
+modify it. The version it validates against is **CaseBench 3.2.8**, frozen
+upstream, and `src/matter-contract.js` transcribes that vocabulary rather than
+deriving it.
+
+Two consequences worth stating:
+
+- A CaseBench change that renamed a role or a type would **fail a test here**
+  (`the mapping tables cover the CaseBench vocabulary exactly`), rather than
+  drifting silently into a wrong Profile.
+- `docs/MILESTONE-0.2.md` records which parts of the Contract are deliberately
+  *not* relied on — `procedure.stage` among them, whose vocabulary is not frozen
+  upstream.
+
 ## 1. Seam summary
 
 | # | Seam | Verdict | Mechanism used |

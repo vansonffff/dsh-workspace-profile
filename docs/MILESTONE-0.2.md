@@ -161,11 +161,15 @@ caught the first two omissions immediately, which is exactly what they are for.
 ## Verification
 
 ```
-node --test "test/*.test.js"     197 tests, all passing (was 162 before this round)
-                                    +6  matter-yaml    the subset reader, both halves
-                                    +21 matter-match   discovery, mapping, verdicts
+node --test "test/*.test.js"     216 tests, all passing (was 162 before this round)
+   (run `node scripts/link-platform-deps.mjs` first on a fresh clone)
+                                    +8  matter-yaml    the subset reader, both halves
+                                    +33 matter-match   discovery, boundary, Contract,
+                                                        mapping tables, verdicts
+                                    +5  dispatcher     the stance a child inherits
                                     +3  compilers      the dispatch Matter block
                                     +4  client-bundle  the Matter card
+                                    +1  no-client-data the published-repo guard
 ```
 
 Against the real corpus, via the probe (not via a one-off script that leaves no
@@ -173,3 +177,103 @@ trace): the six live matters in the working workspace were read end to end —
 discovered, parsed, mapped and compared — and each maps to a pair the plugin
 offers. A Workspace configured from its Matter reports `match/match`; the same
 Matter against a different Workspace reports `mismatch/mismatch`.
+
+---
+
+## Revision 2 — trust boundaries and context propagation
+
+An independent review of `82d1ec3` held the milestone at HOLD and named seven
+gaps. All seven were real; none was a disagreement about direction. They are
+fixed here, in its order.
+
+### 1. A dispatched child inherited the Workspace default, not the session's stance
+
+The child's assignment used `policy.defaultPerspective`. The parent's own prompt
+section has always read the *session's* `/perspective` override first, so:
+
+```
+session: /perspective investor
+parent works from:   investor
+child was told:      administrator
+```
+
+and nothing on either side said so. `compileDispatchTask`'s own comment promised
+"the effective stance".
+
+Fixed by extracting `resolveEffectivePerspective()` into `policy.js` — one function
+that both the prompt section and the dispatcher call, so parent and child cannot
+answer the same question differently. It also records in the child's assignment
+whether the stance is the session's or the Workspace's, because a stance that lasts
+one conversation is a different fact from a stance that is permanent.
+
+Tests: the session's stance reaches the child; `none` silences the child too; a
+stance the current Profile does not define is dropped rather than translated; a
+broken lookup costs the child its override but not its stance.
+
+### 2. Matter discovery crossed the Workspace boundary
+
+`findMatterFile` walked to the filesystem root. CaseBench's Contract stops at the
+workspace root and forbids crossing it. A Workspace that is an ordinary project
+directory sitting inside a directory that happens to hold a `matter.yaml` would
+have been adopted as that Matter. `findMatter`/`findMatterFile` now take
+`workspaceRoot`, supplied from the Workspace the session already resolved into.
+
+The boundary comparison is by path segment, not string prefix: `/work/matter-old`
+starts with `/work/matter` but is a sibling.
+
+### 3. Strict about YAML syntax, not about the Contract
+
+`matter-yaml.js` refused unknown *syntax*, but a document that parsed was taken at
+face value: `schema_version: 999` was not noticed, `type: nonsense` fell back to
+the `general` Profile, and `id: not-a-uuid` was accepted. The page could therefore
+report a confident, ordinary answer about a broken Matter — the failure the strict
+reader exists to prevent, one level up.
+
+`src/matter-contract.js` now pins CaseBench **3.2.8**'s vocabulary — transcribed,
+not derived, because a table that followed the upstream would pin nothing — and
+validates `schema_version`, the id's UUID form, a non-empty name, the type
+vocabulary, and the type↔role constraint.
+
+It also checks the **case state**: `_case_state.json` must exist, be State v4, and
+carry the same `matter_id`. `matter.yaml` alone is not the identity, and telling a
+child "you are working on Matter AAA" while the state says BBB is a false statement
+about a live matter.
+
+### 4. "Recorded, not assumed" was only half true
+
+The module argued that a name coincidence should be recorded in a table rather than
+relied upon — and then only `non-litigation` had one, with everything else falling
+through a `table === undefined ? roleKey` fallback. Every type now has an explicit
+row, the fallback is gone (an unknown type maps to nothing, not to itself), and a
+test asserts each row lists exactly the roles the Contract defines — so a rename on
+either side turns red.
+
+### 5. `lstat` failures were all read as "no file here"
+
+`ENOENT` and `EACCES` are different answers. Collapsing them sent an unreadable
+candidate's walk *upward*, where it could find a different Matter and attribute the
+session to that one. Only `ENOENT` and `ENOTDIR` mean absence now; anything else is
+reported and stops the walk.
+
+### 6. The privacy guard's skip was a pass
+
+`catch { return }` inside `node:test` reports **pass**, not skip — so a fresh clone
+or CI showed a green tick on a check that ran nothing. It now calls `t.skip()`, and
+`RELEASE_CHECK=1` turns the skip into a failure, so a release either checks or
+refuses rather than shipping unexamined.
+
+### 7. Documentation drift
+
+The test counts in this file and the README were stale.
+
+### Still not done, deliberately
+
+- **No prompt injection for the parent session.** The requirement is a Settings
+  readout; section names and orders are frozen and measured.
+- **No apply affordance.** A file can change without the user touching the page.
+- **`procedure.stage` is read, displayed, and not mapped.** Its vocabulary is not
+  frozen upstream.
+- The three `/Users/vanson/...` paths in the probes and dev notes are pre-existing
+  and already public in the `v0.1.2` release. One of them
+  (`perspective-probe.mjs`'s `REAL_HOME`) is a safety guard that refuses to operate
+  on the real home directory; generalizing the probes is a separate change.

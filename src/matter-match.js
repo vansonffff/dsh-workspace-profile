@@ -34,6 +34,7 @@
  */
 
 import { perspectivesFor, validateProfilePerspective } from './policy.js';
+import { NO_STANCE_ROLES } from './matter-contract.js';
 
 /**
  * CaseBench `matter.type` → this plugin's Profile id.
@@ -57,16 +58,50 @@ export const FALLBACK_PROFILE = 'general';
  * same tokens, and that is asserted rather than relied upon.
  */
 export const ROLE_TO_PERSPECTIVE = Object.freeze({
+  // Litigation and Bankruptcy happen to use the same tokens on both sides. That is
+  // *recorded here* rather than assumed: with these two rows absent, the fallback
+  // below would treat "no table" as "same name", and a rename on either side would
+  // drift silently instead of turning a test red.
+  litigation: Object.freeze({
+    plaintiff: 'plaintiff',
+    defendant: 'defendant',
+    'third-party': 'third-party',
+    appellant: 'appellant',
+    respondent: 'respondent',
+    applicant: 'applicant',
+    'respondent-to-application': 'respondent-to-application',
+  }),
+  bankruptcy: Object.freeze({
+    administrator: 'administrator',
+    debtor: 'debtor',
+    creditor: 'creditor',
+    investor: 'investor',
+    'restructuring-advisor': 'restructuring-advisor',
+  }),
+  // The one place the two vocabularies genuinely diverge. A `debtor` inside a
+  // proceeding and a `debtor` outside one are different jobs, and the Perspective
+  // id is what a person types at `/perspective`, so it is abbreviated while the
+  // label spells the meaning out.
   'non-litigation': Object.freeze({
     debtor: 'debtor-oc',
     creditor: 'creditor-oc',
     investor: 'investor-oc',
     'restructuring-advisor': 'advisor-oc',
   }),
+  // No rows: these types offer only "no stance", so a specific role beside them is
+  // an impossible pair rather than an unmapped one.
+  other: Object.freeze({}),
+  unclassified: Object.freeze({}),
 });
 
-/** Role values that mean "no stance", in either vocabulary. */
-export const NO_STANCE_ROLES = Object.freeze(['unknown', 'other']);
+/**
+ * Role values that mean "no stance".
+ *
+ * Re-exported from the Contract module rather than restated: the mapping and the
+ * validator must agree about what "no stance" is, or a role could be valid to read
+ * and impossible to map.
+ */
+export { NO_STANCE_ROLES } from './matter-contract.js';
 
 /** The Perspective id meaning "no stance". */
 export const NO_PERSPECTIVE = 'none';
@@ -101,11 +136,14 @@ export function perspectiveForMatter({ type, role }) {
   if (roleKey === '' || NO_STANCE_ROLES.includes(roleKey)) return NO_PERSPECTIVE;
   const typeKey = typeof type === 'string' ? type : '';
   const table = ROLE_TO_PERSPECTIVE[typeKey];
-  // Identity mapping for the types whose tokens coincide; see the module note.
-  const candidate = table === undefined ? roleKey : table[roleKey];
-  // A domain that has a table and does not list this role has no such position —
-  // that is an impossible pair, not "no stance". The two must stay distinguishable:
-  // `none` means the user has not chosen, `null` means the data is wrong.
+  // Every type has a row. A type without one is a type this plugin does not know,
+  // and guessing "the tokens probably match" is the drift the table exists to
+  // prevent — so it maps to nothing rather than to itself.
+  if (table === undefined) return null;
+  const candidate = table[roleKey];
+  // A domain that does not list this role has no such position — that is an
+  // impossible pair, not "no stance". The two must stay distinguishable: `none`
+  // means the user has not chosen, `null` means the data is wrong.
   if (candidate === undefined) return null;
   const profile = profileForMatterType(typeKey);
   return perspectivesFor(profile).includes(candidate) ? candidate : null;

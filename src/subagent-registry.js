@@ -251,19 +251,26 @@ export function compilePersona(definition, context) {
  * @param {string} input.workspaceTitle - the Workspace's display title.
  * @param {string} input.profileLabel - the Profile's display label.
  * @param {string} input.perspectiveLabel - the effective Perspective's label, or `''`.
+ * @param {boolean} [input.perspectiveOverridden] - whether that stance came from the
+ *   session rather than the Workspace. The parent's own section states its source,
+ *   so the child is told the same thing rather than being left to assume the stance
+ *   is the permanent one.
  * @param {object|null} [input.matter] - the CaseBench Matter the Workspace sits
  *   inside, when one was discovered. Its fields come off a file in the user's own
  *   workspace, so every one of them is sanitized like any other user-authored text.
  * @returns {string} the complete prompt for the child.
  */
-export function compileDispatchTask({ task, workspaceTitle, profileLabel, perspectiveLabel, matter }) {
+export function compileDispatchTask({ task, workspaceTitle, profileLabel, perspectiveLabel, perspectiveOverridden, matter }) {
   const body = typeof task === 'string' ? task.trim() : '';
   const lines = [
     '下列任务由同一工作区中的主 Agent 派遣，你没有父会话的历史，请仅依据本说明与自行读取的材料完成。',
     '',
     `工作区：${sanitizeTemplateText(workspaceTitle)}`,
     `工作区类型：${sanitizeTemplateText(profileLabel)}`,
-    perspectiveLabel === '' ? '工作立场：未指定' : `工作立场：${sanitizeTemplateText(perspectiveLabel)}`,
+    perspectiveLabel === ''
+      ? '工作立场：未指定'
+      : `工作立场：${sanitizeTemplateText(perspectiveLabel)}`
+        + (perspectiveOverridden === true ? '（本次会话指定）' : '（工作区默认）'),
     ...matterContextLines(matter),
     '',
     '任务：',

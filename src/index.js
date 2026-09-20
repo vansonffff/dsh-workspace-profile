@@ -114,7 +114,16 @@ export function apply(ctx, config = {}) {
   // Resolves the CaseBench Matter a session sits inside. Its synchronous half is
   // what the Settings read uses; nothing in the prompt sections depends on it, so a
   // composition that never resolves one degrades to "no Matter" rather than failing.
-  const matterResolver = new MatterResolver({ logger });
+  const matterResolver = new MatterResolver({
+    logger,
+    // The Workspace directory bounds the upward walk, so a Matter above the
+    // Workspace is never adopted. `ensureReady` resolves the Workspace first,
+    // so this is a lookup by the time a Matter is asked for.
+    workspacePathFor: (agent) => {
+      const workspaceId = resolver.workspaceIdForAgent(agent);
+      return workspaceId === undefined ? undefined : resolver.describe(workspaceId)?.path;
+    },
+  });
   const catalog = new ModelCatalog({ getLlm, logger });
 
   /**
@@ -194,6 +203,9 @@ export function apply(ctx, config = {}) {
     getSubagents,
     getResolver: () => resolver,
     getMatterResolver: () => matterResolver,
+    // The same source the prompt section reads, so a dispatched child inherits
+    // the session's stance rather than the Workspace's default.
+    getSessionPerspective: (agent) => sessionPerspectives.overrideFor(agent),
     getStore,
     getCatalog: () => catalog,
     now,

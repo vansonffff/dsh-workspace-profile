@@ -259,7 +259,7 @@ client.js            the Settings section (classic script, no bundler)
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition, plus
                        matter-probe.mjs and matter-yaml-golden.py for the Matter reader
-test/                197 tests, and fixtures/ holding the PyYAML golden pair
+test/                216 tests, and fixtures/ holding the PyYAML golden pair
 docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2
 ```
 
@@ -296,6 +296,21 @@ it resolves to your real `~/.dsh` — `--home` alone is not enough, because the 
 that persist anything resolve their root through `DSH_HOME`, and a probe that
 leaves it unset reads your real Workspaces and writes session logs into your real
 home. Both happened before the guard existed.
+
+Two things the throwaway home needs before a probe will boot, neither obvious from
+the error you get without them:
+
+1. **The `web` profile, installed.** Copying `~/.dsh/profiles` is not enough on its
+   own: the profile's plugin bundles must resolve, or `loadProfile` fails with
+   `cannot resolve profile bundle …`.
+2. **The same directory depth as `~/.dsh`.** The bundles are *relative* symlinks
+   (`…/node_modules/kdocs-settings -> ../../../../Documents/DSH/kdocs-settings`), so
+   a home at `/tmp/probe` resolves them to `/tmp/Documents/…` and they dangle. A
+   sibling of `~/.dsh` — `~/.dsh-probe` — resolves them correctly.
+
+A probe that answers "workspace … is not registered" is working: it reads whatever
+workspace registry the home has, and a fresh home has none. To exercise a Workspace
+against a real case, register that case directory first.
 
 ```bash
 node scripts/boot-probe.mjs   --home /tmp/dsh-probe-home

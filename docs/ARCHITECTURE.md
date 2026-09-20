@@ -53,7 +53,8 @@ renders the gaps rather than a control that fails.
 | `src/workspace-resolution.js` | cwd → `WorkspaceId`, sync index + async canon | nothing |
 | `src/matter-yaml.js` | the `matter.yaml` subset reader; refuses everything else | nothing |
 | `src/matter-resolution.js` | cwd → Matter Root, sync lookup + async discovery | `matter-yaml` |
-| `src/matter-match.js` | CaseBench type/role → Profile/Perspective, and the verdicts | `policy` |
+| `src/matter-match.js` | CaseBench type/role → Profile/Perspective, and the verdicts | `policy`, `matter-contract` |
+| `src/matter-contract.js` | the CaseBench 3.2.8 vocabulary and its validator | nothing |
 | `src/profile-runtime.js` | Profile/Perspective text loading and the three sections | `policy`, `subagent-registry` (sanitizer) |
 | `src/skill-policy.js` | per-Agent shadows; the Settings skill catalog | `policy`, `dsh-scope` |
 | `src/model-catalog.js` | provider/model/effort catalog, route preflight | `errors` |
@@ -168,6 +169,25 @@ package has no dependencies, so it reads the subset CaseBench actually writes
 guessed would not fail loudly — it would return a wrong `role`, and a wrong role
 silently selects the wrong professional stance for a live matter. An unreadable
 Matter degrades to "no Matter", which the page can show.
+
+**The upstream Contract is pinned, not followed.** `src/matter-contract.js`
+transcribes CaseBench 3.2.8's vocabulary and validates against it. Deriving the
+table from the upstream would pin nothing; transcribing it means a CaseBench change
+shows up as a failing test here, which is what a consumer of a frozen Contract
+should get. Strict YAML *syntax* was never enough — `type: nonsense` used to fall
+back to `general` and produce a confident, ordinary answer about a broken Matter.
+
+**One function decides the effective Perspective.** `resolveEffectivePerspective`
+in `policy.js` is called by the parent's prompt section and by the subagent
+dispatcher. They ask the same question, and before this they could answer it
+differently: a session that moved its stance with `/perspective` had its child
+inherit the Workspace default instead.
+
+**Matter discovery is bounded by the Workspace.** The upstream rule is "up to the
+workspace root, never across it", and the boundary arrives from the Workspace the
+session already resolved into. Without it, a Workspace that is an ordinary project
+directory inside a directory holding a `matter.yaml` would be adopted as that
+Matter.
 
 **The Matter mapping is a table, not name coincidence.** CaseBench's role tokens and
 this plugin's Perspective ids were specified separately. For `litigation` and

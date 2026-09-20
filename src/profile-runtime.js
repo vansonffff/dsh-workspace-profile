@@ -58,6 +58,8 @@ import {
   PROFILE_IDS,
   PROFILE_LABELS,
   PERSPECTIVE_LABELS,
+  perspectiveLabelOf,
+  resolveEffectivePerspective,
   PERSPECTIVES_BY_PROFILE,
   enabledSubagents,
   perspectivesFor,
@@ -263,29 +265,19 @@ export function composePerspectiveSection({ policy, configured, override, texts 
   if (policy === undefined || configured !== true) return '';
 
   const profile = policy.profile;
-  const vocabulary = perspectivesFor(profile);
 
-  // An override is honoured only where it is legal, and `none` is a legal
-  // instruction rather than an absent one: `/perspective none` means "this
-  // session uses no stance", which is why `/perspective default` exists as a
-  // separate argument for "go back to the Workspace's stance". Treating the two
-  // as the same would make it impossible to silence a stance for one
-  // conversation without also changing what new sessions get.
-  //
-  // Legality is re-checked here, not only at write time: an override
-  // deliberately outlives a Workspace reconfiguration (it is keyed by session,
-  // not by Workspace), so a Workspace that moved from Bankruptcy to Litigation
-  // can still hold an override naming `administrator`. Injecting it would put an
-  // insolvency stance into a lawsuit, so it is dropped rather than translated,
-  // and the Workspace default applies instead.
-  const overridden = typeof override === 'string' && vocabulary.includes(override);
-  const perspective = overridden ? override : policy.defaultPerspective;
+  // Which stance is in force is decided in `policy.js`, not here: a dispatched
+  // child's assignment asks the same question, and the two must not be able to
+  // answer it differently. See `resolveEffectivePerspective`.
+  const { perspective, overridden } = resolveEffectivePerspective({
+    profile,
+    defaultPerspective: policy.defaultPerspective,
+    sessionOverride: override,
+  });
 
-  if (perspective === undefined || perspective === 'none' || !vocabulary.includes(perspective)) {
-    return '';
-  }
+  if (perspective === 'none') return '';
 
-  const label = PERSPECTIVE_LABELS[perspective] ?? perspective;
+  const label = perspectiveLabelOf(perspective) || perspective;
   const source =
     overridden ? '当前会话通过 `/perspective` 指定的立场' : '当前工作区配置的默认立场';
 

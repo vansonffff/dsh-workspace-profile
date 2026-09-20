@@ -37,7 +37,15 @@
  */
 
 import { explainStopReason, NoWorkspaceContextError, SubagentRunFailedError, UnknownSubagentError } from './errors.js';
-import { PROFILE_LABELS, PERSPECTIVE_LABELS, enabledSubagents, findSubagent, resolveWorkspacePolicy } from './policy.js';
+import {
+  PERSPECTIVE_LABELS,
+  PROFILE_LABELS,
+  enabledSubagents,
+  findSubagent,
+  perspectiveLabelOf,
+  resolveEffectivePerspective,
+  resolveWorkspacePolicy,
+} from './policy.js';
 import { compileDispatchTask, compilePersona, renderSubagentOutput } from './subagent-registry.js';
 
 /**
@@ -73,10 +81,11 @@ export class SubagentDispatcher {
    * @param {() => string} [deps.now] - clock, injectable for tests.
    * @param {{ info: Function, warn: Function }} [deps.logger] - diagnostics sink.
    */
-  constructor({ getSubagents, getResolver, getMatterResolver, getStore, getCatalog, now, logger }) {
+  constructor({ getSubagents, getResolver, getMatterResolver, getSessionPerspective, getStore, getCatalog, now, logger }) {
     /** @private */ this.getSubagents = getSubagents;
     /** @private */ this.getResolver = getResolver;
     /** @private */ this.getMatterResolver = getMatterResolver;
+    /** @private */ this.getSessionPerspective = getSessionPerspective;
     /** @private */ this.getStore = getStore;
     /** @private */ this.getCatalog = getCatalog;
     /** @private */ this.now = now ?? (() => new Date().toISOString());
@@ -165,14 +174,35 @@ export class SubagentDispatcher {
     }
 
     const profileLabel = PROFILE_LABELS[policy.profile] ?? policy.profile;
-    const perspectiveLabel =
-      policy.defaultPerspective === 'none'
-        ? ''
-        : (PERSPECTIVE_LABELS[policy.defaultPerspective] ?? policy.defaultPerspective);
+
+    // The stance **this session** is working from — not the Workspace's default.
+    // A session may have moved its position with `/perspective`, and a child that
+    // reverted to the default would reason from a different position than the one
+    // its parent is working from. Resolved through the same function the parent's
+    // prompt section uses, so the two cannot drift.
+    let sessionOverride;
+    try {
+      sessionOverride = this.getSessionPerspective?.(agent);
+    } catch (error) {
+      // A broken override lookup must not cost the child its stance entirely; it
+      // falls back to the Workspace default, which is what would have happened
+      // before this read existed.
+      this.logger?.warn?.(
+        `workspace-profile: could not read the session Perspective override (${messageOf(error)})`,
+      );
+    }
+    const { perspective, overridden } = resolveEffectivePerspective({
+      profile: policy.profile,
+      defaultPerspective: policy.defaultPerspective,
+      sessionOverride,
+    });
+    const perspectiveLabel = perspectiveLabelOf(perspective);
     const workspaceTitle = workspace?.title ?? workspaceId;
 
     const persona = compilePersona(definition, { workspaceTitle, profileLabel, perspectiveLabel });
-    const prompt = compileDispatchTask({ task, workspaceTitle, profileLabel, perspectiveLabel, matter });
+    const prompt = compileDispatchTask({
+      task, workspaceTitle, profileLabel, perspectiveLabel, perspectiveOverridden: overridden, matter,
+    });
 
     const startedAt = this.now();
     /** @type {any} */

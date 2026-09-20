@@ -266,6 +266,63 @@ export function profileSupportsPerspectives(profile) {
 }
 
 /**
+ * The Perspective actually in force, from the two places one can come from.
+ *
+ * A session's `/perspective` override and the Workspace's default are the same
+ * question asked twice, and **every consumer must answer it the same way** — the
+ * parent's prompt section and a dispatched child's assignment are the same
+ * professional stance, and a child that silently worked from the Workspace default
+ * while its parent worked from an override would be reasoning from a different
+ * position than the one it was asked to take.
+ *
+ * The rules, in one place:
+ *
+ * - an override counts only where it is **legal for the current Profile**. An
+ *   override is keyed by session and deliberately outlives a Workspace
+ *   reconfiguration, so a Workspace that moved from Bankruptcy to Litigation can
+ *   still hold one naming `administrator`; it is dropped, never translated.
+ * - `none` is a legal override and means "this session uses no stance". It is not
+ *   the same as an absent override, which falls back to the Workspace.
+ * - the fallback is the Workspace default when that is itself legal, and `none`
+ *   otherwise.
+ *
+ * @param {object} input - the inputs.
+ * @param {string} input.profile - the Profile id.
+ * @param {string|undefined} input.defaultPerspective - the Workspace's own answer.
+ * @param {string|undefined|null} input.sessionOverride - the session's answer, if any.
+ * @returns {{ perspective: string, overridden: boolean, ignoredOverride: boolean }}
+ *   the effective id, whether it came from the session, and whether a session
+ *   answer was present but unusable here.
+ */
+export function resolveEffectivePerspective({ profile, defaultPerspective, sessionOverride }) {
+  const vocabulary = perspectivesFor(profile);
+  const isLegal = (id) => typeof id === 'string' && id !== '' && vocabulary.includes(id);
+
+  if (isLegal(sessionOverride)) {
+    return { perspective: sessionOverride, overridden: true, ignoredOverride: false };
+  }
+  return {
+    perspective: isLegal(defaultPerspective) ? defaultPerspective : 'none',
+    overridden: false,
+    ignoredOverride: sessionOverride !== undefined && sessionOverride !== null && sessionOverride !== '',
+  };
+}
+
+/**
+ * The human-facing label for a Perspective, or `''` for "no stance".
+ *
+ * Empty rather than "不设定" because callers use the empty string to mean "state
+ * nothing about the stance", which is different from stating that there is none.
+ *
+ * @param {string|undefined|null} perspective - the Perspective id.
+ * @returns {string} its label, or `''`.
+ */
+export function perspectiveLabelOf(perspective) {
+  if (typeof perspective !== 'string' || perspective === '' || perspective === 'none') return '';
+  return PERSPECTIVE_LABELS[perspective] ?? perspective;
+}
+
+/**
  * Validate a Profile/Perspective pair against the business rules.
  *
  * The pair is checked as a pair, not as two independent fields: a Perspective

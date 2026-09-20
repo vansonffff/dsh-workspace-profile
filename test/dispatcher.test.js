@@ -47,8 +47,8 @@ function makeDispatcher(spec = {}) {
 
   const policy = {
     onboardingStatus: 'configured',
-    profile: 'bankruptcy',
-    defaultPerspective: 'administrator',
+    profile: spec.profile ?? 'bankruptcy',
+    defaultPerspective: spec.defaultPerspective ?? 'administrator',
     skillOverrides: {},
     subagents: spec.subagents ?? { [DEFINITION.id]: DEFINITION },
     createdAt: NOW_ISO,
@@ -91,6 +91,9 @@ function makeDispatcher(spec = {}) {
   const dispatcher = new SubagentDispatcher({
     getSubagents: () => subagents,
     getResolver: () => resolver,
+    // `undefined` means "this session has no override", which is not the same as
+    // an override of `none`.
+    getSessionPerspective: () => spec.sessionPerspective,
     getStore: () => store,
     getCatalog: () => catalog,
     now: () => NOW_ISO,
@@ -248,4 +251,60 @@ test('listing reports the workspace context and only the enabled agents', () => 
   const listing = dispatcher.listFor(agent);
   assert.equal(listing.context.workspaceId, 'ws-1');
   assert.deepEqual(listing.subagents.map((entry) => entry.key), ['case-researcher']);
+});
+
+// ── the stance a child inherits ──────────────────────────────────────────────
+//
+// A dispatched child has no parent history, so the assignment is the only place
+// it can learn which position it is working from. The parent's own prompt section
+// reads the *session's* stance; if the child read the Workspace default instead,
+// parent and child would reason from different positions and nothing on either
+// side would say so.
+
+test('a dispatched child inherits the session stance, not the Workspace default', async () => {
+  const { dispatcher, agent, calls } = makeDispatcher({ sessionPerspective: 'investor' });
+  await dispatcher.dispatch({ agent, reference: '案例检索员', task: 't' });
+  const text = calls.start[0].request.prompt[0].text;
+  assert.ok(text.includes('工作立场：投资人 (Investor)'), 'the session stance reaches the child');
+  assert.ok(text.includes('（本次会话指定）'), 'and is named as the session’s, not the Workspace’s');
+});
+
+test('with no session stance the child gets the Workspace default, named as such', async () => {
+  const { dispatcher, agent, calls } = makeDispatcher({});
+  await dispatcher.dispatch({ agent, reference: '案例检索员', task: 't' });
+  const text = calls.start[0].request.prompt[0].text;
+  assert.ok(text.includes('工作立场：管理人 (Administrator)'));
+  assert.ok(text.includes('（工作区默认）'));
+});
+
+test('a session stance of none silences the child too', async () => {
+  // `none` is a decision, not an absence: the parent is working from no position,
+  // so the child must not be handed one.
+  const { dispatcher, agent, calls } = makeDispatcher({ sessionPerspective: 'none' });
+  await dispatcher.dispatch({ agent, reference: '案例检索员', task: 't' });
+  assert.ok(calls.start[0].request.prompt[0].text.includes('工作立场：未指定'));
+});
+
+test('a session stance the current Profile does not define is dropped, not translated', async () => {
+  // The session override outlives a Workspace reconfiguration — it is keyed by
+  // session — so a Workspace that moved from Bankruptcy to Litigation can still
+  // hold one naming `administrator`. Injecting it would put an insolvency stance
+  // into a lawsuit, so it falls back to the Workspace's own answer.
+  const { dispatcher, agent, calls } = makeDispatcher({
+    profile: 'litigation',
+    defaultPerspective: 'plaintiff',
+    sessionPerspective: 'administrator',
+  });
+  await dispatcher.dispatch({ agent, reference: '案例检索员', task: 't' });
+  const text = calls.start[0].request.prompt[0].text;
+  assert.ok(text.includes('工作立场：原告代理人 (Plaintiff)'), 'falls back to the new Profile’s default');
+  assert.ok(!text.includes('管理人'), 'and never carries the stale insolvency stance');
+});
+
+test('a broken session-stance lookup costs the child its override, not its stance', async () => {
+  const { dispatcher, agent, calls } = makeDispatcher({});
+  // Wired to throw rather than return.
+  dispatcher.getSessionPerspective = () => { throw new Error('storage exploded'); };
+  await dispatcher.dispatch({ agent, reference: '案例检索员', task: 't' });
+  assert.ok(calls.start[0].request.prompt[0].text.includes('工作立场：管理人 (Administrator)'));
 });
