@@ -248,19 +248,19 @@ function policyWith(subagents) {
 test('the dispatch task carries the Matter a child could not otherwise recover', () => {
   const task = compileDispatchTask({
     task: 't',
-    workspaceTitle: '浦大公司系列案件',
+    workspaceTitle: '示例系列案件',
     profileLabel: '诉讼 (Litigation)',
     perspectiveLabel: '原告代理人 (Plaintiff)',
     matter: {
-      id: '8a0be89b-6f7d-4ec3-9a14-130da6158a9a',
-      name: '浦大公司系列案件',
+      id: '11111111-2222-3333-4444-555555555555',
+      name: '示例系列案件',
       type: 'litigation',
       role: 'plaintiff',
       stage: 'unknown',
     },
   });
   assert.ok(task.includes('案件 (Matter)：'));
-  assert.ok(task.includes('8a0be89b-6f7d-4ec3-9a14-130da6158a9a'));
+  assert.ok(task.includes('11111111-2222-3333-4444-555555555555'));
   assert.ok(task.includes('类型：litigation'));
   assert.ok(task.includes('正式角色：plaintiff'));
   // The effective stance is the line above; the Matter's formal role is printed

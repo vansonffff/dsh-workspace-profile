@@ -1696,7 +1696,7 @@ test('the Matter card reports what the directory declares, and whether we agree'
       available: true,
       discovered: true,
       problem: null,
-      matter: { id: '8a0be89b-6f7d-4ec3-9a14-130da6158a9a', name: '浦大公司系列案件', type: 'litigation', role: 'plaintiff', stage: 'unknown', modules: ['litigation.series'] },
+      matter: { id: '11111111-2222-3333-4444-555555555555', name: '示例系列案件', type: 'litigation', role: 'plaintiff', stage: 'unknown', modules: ['litigation.series'] },
       match: {
         profile: { expected: 'litigation', actual: 'litigation', verdict: 'match' },
         perspective: { expected: 'plaintiff', workspaceDefault: 'plaintiff', sessionOverride: null, effective: 'plaintiff', verdict: 'match' },
@@ -1708,7 +1708,7 @@ test('the Matter card reports what the directory declares, and whether we agree'
   // Every field the Host read is shown, including the ones the page cannot derive.
   assert.ok(text.includes('matterName') && text.includes('matterId') && text.includes('matterType'), 'the identity fields render');
   assert.ok(text.includes('matterRole') && text.includes('matterStage') && text.includes('matterModules'), 'the classification fields render');
-  assert.ok(text.includes('8a0be89b-6f7d-4ec3-9a14-130da6158a9a'), 'the Matter id is shown verbatim');
+  assert.ok(text.includes('11111111-2222-3333-4444-555555555555'), 'the Matter id is shown verbatim');
   assert.ok(text.includes('litigation.series'), 'modules are shown');
   // The two verdicts, each its own row.
   assert.ok(text.includes('matterProfileMatch') && text.includes('matterPerspectiveMatch'), 'both comparisons are shown');

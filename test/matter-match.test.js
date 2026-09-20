@@ -59,7 +59,7 @@ test('identity comes from the file, never from the directory name', async (t) =>
   const root = await workspace(t);
   // A directory named after one matter holding another matter's contract. The id
   // in the file wins; a plugin that read the name would report the wrong Matter.
-  const dir = join(root, '看起来像浦大公司系列案件');
+  const dir = join(root, '看起来像示例系列案件');
   await mkdir(dir);
   await writeFile(join(dir, 'matter.yaml'), MATTER({ matter: { id: '99999999-8888-7777-6666-555555555555' } }));
   const { facts } = await findMatter(dir);

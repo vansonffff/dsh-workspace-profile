@@ -64,7 +64,7 @@ the live DOM and the Host's own files.
 | Profile/Perspective selection | changing Profile to 破产重整 repopulated the Perspective list with all six ids; 管理人 selected |
 | Save | status moved 未配置 → 已配置, 配置版本 0 → 1 |
 | Error boundary | **fired and reported a real bug** — `TypeError: … reading 'bind'` rendered in the panel instead of a blank seat (see §3) |
-| Two Workspaces, independent policy | DSH → bankruptcy/administrator **and** a second Workspace (2026民57-酬诺弹簧-毛坤霞-货款纠纷) → litigation/none, stored under separate keys in `settings.yaml` |
+| Two Workspaces, independent policy | DSH → bankruptcy/administrator **and** a second Workspace (某买卖合同纠纷案) → litigation/none, stored under separate keys in `settings.yaml` |
 | Orphaned policy | a policy whose Workspace left the registry appears under 孤立的配置, is **not** deleted, and offers an explicit delete |
 | Persistence across restart | the probe was restarted repeatedly; `settings.yaml` retained `workspace-profile` with exactly the fields written (path ops, never a wholesale replacement) |
 | Skill catalog | 6 Skills with sources `bundled` / `user-agents`; `bundled` rows render 只读 (per the plan's managed/unmanaged split) |

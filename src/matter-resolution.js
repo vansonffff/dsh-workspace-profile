@@ -15,7 +15,7 @@
  * 5. **never infer identity from the directory name.** The name is a label. Only
  *    `matter.id` is identity, and only the file carries it.
  *
- * Rule 5 is the one worth stating twice: `/work/浦大公司系列案件` is not evidence
+ * Rule 5 is the one worth stating twice: `/work/示例系列案件` is not evidence
  * that the directory is that matter, and a directory renamed by hand must not
  * change which Profile the session runs under.
  *

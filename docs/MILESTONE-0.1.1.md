@@ -231,7 +231,7 @@ whose `AGENTS.md` exists (31,967 bytes).
 | Workspace | Path has AGENTS.md | Panel says |
 |---|---|---|
 | DSH | yes | 已发现 ✔ |
-| 2026民57-酬诺弹簧-毛坤霞-货款纠纷 | no | 未发现 ✔ |
+| 某买卖合同纠纷案 | no | 未发现 ✔ |
 
 Getting this right required knowing *which* workspace the panel was showing. An
 earlier read of the same DOM returned 已发现 without establishing the selection,
