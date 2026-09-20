@@ -54,8 +54,21 @@ process.stdout.write(`local.get("workspaceProfile/snapshot"): ${JSON.stringify(t
 process.stdout.write(`local.hasSeen("workspaceProfile/snapshot"): ${JSON.stringify(typert?.local?.hasSeen?.('workspaceProfile/snapshot'))}\n`);
 process.stdout.write(`gateway.claimsEndpoint("workspaceProfile/snapshot"): ${JSON.stringify(gateway?.claimsEndpoint?.('workspaceProfile/snapshot'))}\n`);
 process.stdout.write(`gateway.claimsEndpoint("settings/describe"): ${JSON.stringify(gateway?.claimsEndpoint?.('settings/describe'))}\n`);
+// The gateway checks the argument shape against the method's own descriptor before
+// it dispatches, so this line has to use the descriptor's shape rather than an
+// approximation of it. Two approximations were tried and both were rejected:
+// `new Map()` ("args must be a plain object") and a blanket `{ args: {} }` for
+// every method ("unexpected \"args\"", because `snapshot` declares no parameters).
+// A method with no parameters takes `{}`; one declaring `args` takes `{ args }`.
+//
+// Before this, the line reported FAILED for a method that was in fact reachable,
+// which is worse than not probing it: it reads like a defect in the plugin.
 try {
-  const invoked = await gateway.invoke({ namespace: 'workspaceProfile', method: 'snapshot', args: new Map() });
+  const invoked = await gateway.invoke({
+    namespace: 'workspaceProfile',
+    method,
+    args: rawArgs === undefined ? {} : { args: rawArgs },
+  });
   process.stdout.write(`gateway.invoke OK: ${JSON.stringify(invoked).slice(0, 200)}\n`);
 } catch (error) {
   process.stdout.write(`gateway.invoke FAILED: ${error?.message}\n${error?.stack?.split('\n').slice(0, 6).join('\n')}\n`);

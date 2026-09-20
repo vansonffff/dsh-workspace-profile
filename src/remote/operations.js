@@ -366,7 +366,13 @@ export function createOperations({
         return { available: false, workspaceId, message: 'the Matter resolver is not mounted' };
       }
 
-      const { facts, problem } = await matterResolver.resolvePath(workspace.path);
+      // The Workspace path is both the start and the boundary. It is the same
+      // directory the Agent walk stops at, so the two reads of one Workspace
+      // cannot disagree: without the boundary this walked to the filesystem root,
+      // and a Workspace that is an ordinary project directory inside a directory
+      // holding a `matter.yaml` was reported here as that Matter while the Agent —
+      // correctly bounded — reported none.
+      const { facts, problem } = await matterResolver.resolvePath(workspace.path, workspace.path);
       const { document } = readDocument();
       const { policy } = resolveWorkspacePolicy(document, workspaceId, now());
 

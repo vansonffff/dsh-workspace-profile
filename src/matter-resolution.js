@@ -263,9 +263,17 @@ export class MatterResolver {
     /** @private */ this.logger = logger;
     /** @private */ this.find = find ?? findMatter;
     /** @private */
-    // Resolves the Agent's Workspace directory, which bounds the upward walk. When
-    // absent the walk is unbounded — correct for the Settings read, which passes
-    // the Workspace path as its own start, and never correct for an Agent.
+    // Resolves the Agent's Workspace directory, which bounds the upward walk.
+    //
+    // Every caller passes a boundary. An earlier version of this comment argued
+    // that the Settings read could leave it out "because the Workspace path is its
+    // own start" — that reasoning was wrong, and writing it down made the bug look
+    // deliberate. Starting *at* the Workspace path does not stop the walk *at* it,
+    // so Settings reported the enclosing Matter while the Agent reported none.
+    // Passing the path as its own boundary is what makes the two reads agree.
+    //
+    // An Agent whose Workspace directory cannot be resolved is the only remaining
+    // unbounded walk, and it is logged where that happens.
     this.workspacePathFor = workspacePathFor;
     /** @private @type {WeakMap<object, {facts: MatterFacts|null, problem: string|null}>} */
     this.agentIndex = new WeakMap();
@@ -317,7 +325,12 @@ export class MatterResolver {
   /**
    * Resolve a directory, de-duplicating concurrent lookups for the same path.
    *
-   * @param {string} path - an absolute directory.
+   * @param {string} path - an absolute directory to start at.
+   * @param {string} [workspaceRoot] - the directory the walk must not go above.
+   *   Omitting it walks to the filesystem root, which is correct only when the
+   *   caller genuinely has no Workspace to bound by. A caller that *has* a
+   *   Workspace and omits it will disagree with the Agent path — which is exactly
+   *   how the Settings card came to report a Matter the session did not have.
    * @returns {Promise<{facts: MatterFacts|null, problem: string|null}>} the answer.
    */
   async resolvePath(path, workspaceRoot = undefined) {

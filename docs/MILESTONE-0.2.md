@@ -161,7 +161,7 @@ caught the first two omissions immediately, which is exactly what they are for.
 ## Verification
 
 ```
-node --test "test/*.test.js"     216 tests, all passing (was 162 before this round)
+node --test "test/*.test.js"     220 tests, all passing (was 162 before this round)
    (run `node scripts/link-platform-deps.mjs` first on a fresh clone)
                                     +8  matter-yaml    the subset reader, both halves
                                     +33 matter-match   discovery, boundary, Contract,
@@ -277,3 +277,113 @@ The test counts in this file and the README were stale.
   and already public in the `v0.1.2` release. One of them
   (`perspective-probe.mjs`'s `REAL_HOME`) is a safety guard that refuses to operate
   on the real home directory; generalizing the probes is a separate change.
+
+## Revision 3 — the Settings read and the Agent read of one Workspace disagreed
+
+The second review passed the architecture and the seven fixes, and then found a
+bug in the seam *between* two things that were each individually correct.
+
+`findMatter` already stopped at the Workspace boundary. The Agent path already
+passed it. The Settings Matter card did not:
+
+```js
+await matterResolver.resolvePath(workspace.path);              // walked to /
+await matterResolver.resolvePath(workspace.path, workspace.path);  // stops here
+```
+
+So one Workspace had two answers:
+
+```text
+/Parent/
+    matter.yaml          ← Matter A
+    /OrdinaryWorkspace/  ← the DSH Workspace
+        src/
+
+Agent     → no Matter
+Settings  → Matter A
+```
+
+### What made this worth more than a one-line fix
+
+The constructor of `MatterResolver` carried a comment I had written to explain
+why the missing argument was fine:
+
+> *absent the walk is unbounded — correct for the Settings read, which passes the
+> Workspace path as its own start, and never correct for an Agent.*
+
+That reasoning is wrong, and writing it down is what let the bug survive the
+first review round: a reader who wondered about the unbounded walk found a
+sentence telling them it was deliberate. Starting *at* the Workspace path does
+not stop the walk *at* it. The comment is now replaced with what actually holds,
+and `resolvePath`'s JSDoc says what omitting the boundary costs.
+
+The generalisable lesson is about where the tests were. Discovery had thorough
+coverage of the boundary rule; the caller that forgot to use it had none. A test
+of `findMatter` cannot fail when `operations.matter` declines to pass the
+argument, so `test/matter-operation.test.js` drives `operations.matter()`.
+
+### The four tests, and why the count matters
+
+| Test | Before the fix |
+| --- | --- |
+| A Workspace with no Matter of its own reports none, not the enclosing one | **fails** |
+| A Workspace holding a Matter reports it, with its identity and its match | passes (control) |
+| The Settings read and the Agent read of one Workspace agree | **fails** |
+| The boundary is the Workspace itself, so a nested Matter is found | passes (control) |
+
+Both control tests pass before and after on purpose: they show the fix repairs
+the broken case without changing the working ones. The two that fail are the
+regression guard, verified by reverting the one-line change and re-running.
+
+The third test is the one that generalises. It asserts the *property that broke*
+— two readers of one Workspace giving one answer — rather than either answer on
+its own, and it exercises both directory shapes (an ordinary project directory
+and a real Matter Root) so neither side can drift alone.
+
+220 tests (was 216).
+
+### Verified end to end, not only in tests
+
+The previous round could not complete the Host-level checks: no case directory on
+this machine is registered as a DSH Workspace, so a *positive* `matter` answer had
+no Workspace to be positive about. That is now closed using a throwaway probe home
+rather than by changing the user's Workspaces — `DSH_HOME` is redirected, so the
+real `~/.dsh` is read-only to the probe, and the seeded Workspace lives in the
+probe home's own registry.
+
+Both directions, through a real booted Host and a real gateway:
+
+```text
+positive   a Workspace that IS a Matter Root
+           → discovered: true, id from matter.id, match computed
+             {"discovered":true,
+              "matter":{"id":"11111111-…","name":"探针案件","type":"bankruptcy",
+                        "role":"administrator","status":"active"},
+              "problem":null,
+              "match":{"profile":{"verdict":"mismatch"},
+                       "perspective":{"verdict":"mismatch"}}}
+
+negative   an ordinary project directory inside a directory holding a matter.yaml
+           → discovered: false, matter: null, problem: null
+             (the enclosing Matter is NOT adopted — the bug this revision fixes)
+```
+
+The `mismatch` verdicts in the positive case are correct, not a failure: the probe
+Workspace carries no stored policy, so its effective configuration is the built-in
+`general` and the Matter's expected Profile is `bankruptcy`. A page that reported
+`match` there would be lying.
+
+### A probe line that had always said FAILED
+
+Running the gateway check above exposed a defect in `remote-probe.mjs` itself. It
+called `gateway.invoke` with `args: new Map()`; the gateway validates the argument
+shape against the method's descriptor and rejected it, so the line printed
+`FAILED` for calls that were perfectly reachable. Two wrong guesses were needed to
+get it right — `new Map()`, then a blanket `{ args: {} }` for every method, which
+`snapshot` rejects because it declares no parameters. The probe now uses the
+descriptor's shape: `{}` when no arguments were given, `{ args }` otherwise.
+
+Worth recording because a probe that reports a false failure is worse than no
+probe: it is evidence pointing the wrong way, and this one would have been read as
+a plugin defect.
+
