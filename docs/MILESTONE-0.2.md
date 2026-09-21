@@ -387,3 +387,89 @@ Worth recording because a probe that reports a false failure is worse than no
 probe: it is evidence pointing the wrong way, and this one would have been read as
 a plugin defect.
 
+## Frozen at 0.2.0 — Registry Binding deliberately deferred
+
+**Status: 0.2.0 is the frozen release of this milestone.** Not 0.2.1. The proposed
+Registry Binding round was worked out in full and then *not* started, and the
+reason is worth recording so the question does not have to be reopened from
+scratch.
+
+### What was actually measured first
+
+The proposal rested on a claim about the real workflow: that a DSH Workspace is a
+KDocs/WPS materials directory rather than the Matter Root. That claim is true here.
+Of the four registered Workspaces, one is exactly that — a WPS Cloud Files cache
+directory — and it is a `case_dir` in the CaseBench registry.
+
+It is *also* true that this plugin is inert for it. Running the real discovery
+against that path returns `facts: null`. No Profile Match, no Perspective Match,
+no Matter context for a dispatched child. So the gap is real, not theoretical.
+
+### Why it is still not worth doing yet
+
+Two findings changed the shape of the decision.
+
+**Profile and Perspective do not depend on Matter at all.** Both prompt sections
+gate on `policy` and `configured` alone (`profile-runtime.js:193`, `:265`).
+Configuring them by hand in Settings already delivers the workspace title, the
+full Profile body, the full Perspective body, the recommended-Skill list and the
+precedence statement. The professional content layer — the part that changes what
+the model does — is already there.
+
+What Registry Binding would add is narrower than it looks:
+
+| | manual configuration | with Registry Binding |
+| --- | --- | --- |
+| Professional content layer injected | yes | yes |
+| Plugin knows which Matter this is | no | yes |
+| A wrong or missing Profile is *reported* | no — a silent `unknown` | yes, `match` / `mismatch` |
+| Dispatched child receives Matter identity | no, silently omitted | yes |
+| The manual step is removed | no | **no** — nothing auto-applies by design |
+
+So it buys verification and identity propagation. It does not remove the manual
+step, and it is not a core capability.
+
+**It would add a lifecycle and an identity mapping**, not a line of code: Workspace
+↔ Registry ↔ Matter Root ↔ per-step refresh ↔ Settings ↔ SubAgent. That is real
+complexity, and the honest trigger for accepting it is a felt pain, not a
+theoretical gap.
+
+### The trigger conditions, written down
+
+Revisit only if one of these actually happens in use:
+
+- forgetting to set Profile, or setting the wrong Perspective
+- a dispatched child producing work that went wrong because it did not know which
+  matter it was working on
+- needing to look up Matter state from inside DSH often enough to be annoying
+- enough matters that mapping them to `My Legal-agents` by hand is a real cost
+- wanting KDocs, To Do and Calendar to move around `matter_id` automatically
+
+Until then, manual Profile + Perspective is the plan, and it is a sound one.
+
+### Two upstream facts a future round will run into
+
+Both were verified against the real registry and the CaseBench source, and both are
+recorded in that project's own log. Summarised here only as far as they affect this
+plugin:
+
+- `case_dir` — the field a Registry Binding would match on — is absent from every
+  one of the six real Matters' `matters[]` entries, and present in `cases[]`, the
+  legacy projection that CaseBench's own rule says v2 readers must not trust. The
+  cause is a migration defect (`matter_migration.py:799` builds the entry without
+  passing `case_dir`), not an architecture one: the field already exists in the v2
+  schema.
+- Creating a Matter without `--case-dir` produces no binding at all, and there is no
+  `set` or `bind` command to add one afterwards. The Skill's own references never
+  mention the flag, so a Matter created by following the documented workflow lands
+  unbound every time.
+
+Neither is this plugin's to fix, and neither blocks the freeze.
+
+### What "frozen" means here
+
+`0.2.0` is the release. Further work on this milestone stops unless a trigger above
+fires. Thin Skill rework is deferred the same way, for the same reason: which
+references actually carry the context cost is a question that real use answers and
+architecture guessing does not.
+
