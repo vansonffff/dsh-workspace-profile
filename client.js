@@ -846,14 +846,14 @@ window.__ModuleLoader__.load({
           codec: {
             mode: 'strict',
             typeSymbol: PACKAGE + '#' + NAMESPACE + '/' + invocation.method + ':' + parameter.name,
-            schema: passthrough(),
+            create: () => passthrough(),
           },
         })),
         ...(invocation.cancellable ? { cancellation: { parameter: 'signal' } } : {}),
         result: {
           mode: 'strict',
           typeSymbol: PACKAGE + '/' + NAMESPACE + '#' + invocation.method + ':result',
-          schema: passthrough(),
+          create: () => passthrough(),
         },
       })),
     };

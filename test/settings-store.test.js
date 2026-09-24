@@ -21,13 +21,13 @@ import { RevisionConflictError, MissingCapabilityError } from '../src/errors.js'
  * @returns {any} the fake provider plus its recorded calls.
  */
 function makeProvider(options = {}) {
-  const calls = { mutate: [], replace: [] };
+  const calls = { mutate: [], update: [] };
   let section = options.section;
   let revision = options.revision ?? 0;
   const provider = {
     describe: () => {
       if (options.describeThrows === true) throw new Error('provider is swapping');
-      return [{ ns: SETTINGS_NS, revision, value: section, schema: {}, applies: 'live' }];
+      return [{ ns: SETTINGS_NS, revision, value: { document: section }, schema: {}, applies: 'live' }];
     },
     mutate: async (ns, ops, expectedRevision) => {
       calls.mutate.push({ ns, ops, expectedRevision });
@@ -35,13 +35,13 @@ function makeProvider(options = {}) {
       if (options.mutateThrows !== undefined) throw new Error(options.mutateThrows);
       assert.equal(ns, SETTINGS_NS);
       if (expectedRevision !== revision) throw new RevisionConflictError(expectedRevision, revision);
-      section = applyOps(section, ops);
+      section = applyOps({ document: section }, ops).document;
       revision += 1;
     },
-    replace: async (ns, next, expectedRevision) => {
-      calls.replace.push({ ns, next, expectedRevision });
+    update: async (ns, next, expectedRevision) => {
+      calls.update.push({ ns, next, expectedRevision });
       if (options.replaceThrows !== undefined) throw new Error(options.replaceThrows);
-      section = next;
+      section = next.document;
       revision += 1;
     },
   };
@@ -63,22 +63,14 @@ function applyOps(section, ops) {
   return next;
 }
 
-function makeStore(provider, scopeOverrides = {}, logger = { warn: () => {} }) {
-  const scope = {
-    get: () => providerSection,
-    watch: () => () => {},
-    update: async () => {},
-    replace: async () => {},
-    ...scopeOverrides,
-  };
-  let providerSection;
-  return { store: new CompositionStore({ provider, scope, logger, now: () => '2026-09-13T00:00:00.000Z' }), setSection: (value) => { providerSection = value; } };
+function makeStore(provider, _unused = {}, logger = { warn: () => {} }) {
+  const ctx = { on: () => () => {} };
+  return { store: new CompositionStore({ provider, ctx, logger, now: () => '2026-09-13T00:00:00.000Z' }) };
 }
 
 test('a read normalizes and reports the revision from the provider', () => {
   const { provider } = makeProvider({ section: { schemaVersion: 1, workspaces: { w1: { profile: 'bankruptcy' } } }, revision: 7 });
-  const { store, setSection } = makeStore(provider);
-  setSection(provider.describe()[0].value);
+  const { store } = makeStore(provider);
   const read = store.read();
   assert.equal(read.document.workspaces.w1.profile, 'bankruptcy');
   assert.equal(read.error, undefined);
@@ -87,8 +79,7 @@ test('a read normalizes and reports the revision from the provider', () => {
 
 test('a write without a revision is refused outright', async () => {
   const { provider } = makeProvider({ section: {}, revision: 3 });
-  const { store, setSection } = makeStore(provider);
-  setSection({});
+  const { store } = makeStore(provider);
   await assert.rejects(
     () => store.write([{ op: 'set', path: ['workspaces', 'w1', 'profile'], value: 'general' }], undefined),
     (error) => {
@@ -101,8 +92,7 @@ test('a write without a revision is refused outright', async () => {
 
 test('a stale revision surfaces as a conflict and writes nothing', async () => {
   const { provider, calls, read } = makeProvider({ section: { schemaVersion: 1, workspaces: {} }, revision: 2 });
-  const { store, setSection } = makeStore(provider);
-  setSection(provider.describe()[0].value);
+  const { store } = makeStore(provider);
   await assert.rejects(
     () => store.write([{ op: 'set', path: ['workspaces', 'w1', 'profile'], value: 'bankruptcy' }], 1),
     (error) => {
@@ -118,8 +108,7 @@ test('a stale revision surfaces as a conflict and writes nothing', async () => {
 
 test('a current revision writes and the store reports the new one', async () => {
   const { provider, calls, read } = makeProvider({ section: { schemaVersion: 1, workspaces: {} }, revision: 2 });
-  const { store, setSection } = makeStore(provider);
-  setSection(provider.describe()[0].value);
+  const { store } = makeStore(provider);
   const next = await store.write([{ op: 'set', path: ['workspaces', 'w1', 'profile'], value: 'bankruptcy' }], 2);
   assert.equal(next, 3);
   assert.equal(calls.mutate[0].expectedRevision, 2);
@@ -132,23 +121,23 @@ test('an unregistered namespace cannot be written, and says so', async () => {
     mutate: async () => { throw new Error('should not be reached'); },
     replace: async () => {},
   };
-  const { store, setSection } = makeStore(provider, { get: () => ({}) });
-  setSection({});
+  const { store } = makeStore(provider);
   assert.equal(store.revision(), undefined);
   const error = new MissingCapabilityError('the `settings` service', 'nothing can be stored');
   // The store's own refusal path: a broken provider read must not become a green
   // write. Simulate by making describe() fail.
   const broken = { ...provider, describe: () => { throw new Error('no provider'); } };
-  const { store: store2, setSection: set2 } = makeStore(broken);
-  set2({});
+  const { store: store2 } = makeStore(broken);
   assert.equal(store2.revision(), undefined);
   assert.ok(error.message.includes('composition fact'));
 });
 
 test('a getter throw degrades to the last good document', () => {
-  const { provider } = makeProvider({ section: { schemaVersion: 1, workspaces: { w1: {} } }, revision: 1 });
+  const { provider } = makeProvider({ section: { schemaVersion: 1, workspaces: { w1: { profile: 'litigation' } } }, revision: 1 });
+  const describe = provider.describe;
   let mode = 'ok';
-  const { store } = makeStore(provider, { get: () => { if (mode === 'boom') throw new Error('mid-swap'); return { schemaVersion: 1, workspaces: { w1: { profile: 'litigation' } } }; } });
+  provider.describe = () => { if (mode === 'boom') throw new Error('mid-swap'); return describe(); };
+  const { store } = makeStore(provider);
   assert.equal(store.read().document.workspaces.w1.profile, 'litigation');
   mode = 'boom';
   const degraded = store.read();
@@ -159,9 +148,11 @@ test('a getter throw degrades to the last good document', () => {
 });
 
 test('an unsupported stored version is reported, never thrown, and keeps the last good read', () => {
-  const { provider } = makeProvider({ section: { schemaVersion: 1, workspaces: {} }, revision: 1 });
+  const { provider } = makeProvider({ section: { schemaVersion: 1, workspaces: { w1: {} } }, revision: 1 });
+  const describe = provider.describe;
   let section = { schemaVersion: 1, workspaces: { w1: {} } };
-  const { store } = makeStore(provider, { get: () => section });
+  provider.describe = () => describe().map((entry) => ({ ...entry, value: { document: section } }));
+  const { store } = makeStore(provider);
   assert.equal(store.read().error, undefined);
   section = { schemaVersion: 42, workspaces: {} };
   const bad = store.read();
@@ -172,8 +163,7 @@ test('an unsupported stored version is reported, never thrown, and keeps the las
 test('a failed repair is reported and does not fail the boot', async () => {
   const warnings = [];
   const { provider } = makeProvider({ section: {}, revision: 1, replaceThrows: 'read-only provider' });
-  const { store, setSection } = makeStore(provider, {}, { warn: (message) => warnings.push(message) });
-  setSection({});
+  const { store } = makeStore(provider, {}, { warn: (message) => warnings.push(message) });
   const applied = await store.persistNormalized({ schemaVersion: 1, initializedAt: 'x', workspaces: {} }, 1);
   assert.equal(applied, false);
   assert.equal(warnings.length, 1);

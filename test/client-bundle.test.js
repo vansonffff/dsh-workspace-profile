@@ -180,7 +180,7 @@ test('every descriptor carries a strict codec, which the Gateway requires', () =
     assert.equal(descriptor.invocation.kind, 'direct');
     assert.equal(descriptor.result.mode, 'strict');
     assert.ok(typeof descriptor.result.typeSymbol === 'string');
-    assert.equal(typeof descriptor.result.schema.parse, 'function');
+    assert.equal(typeof descriptor.result.create().parse, 'function');
     for (const parameter of descriptor.parameters) {
       assert.equal(parameter.codec.mode, 'strict');
       assert.equal(parameter.source, 'json');

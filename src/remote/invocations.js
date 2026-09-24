@@ -107,14 +107,14 @@ export function buildRemoteDescriptors({ parameterSchema, valueSchema }) {
       codec: {
         mode: 'strict',
         typeSymbol: `${WORKSPACE_PROFILE_PACKAGE}#${namespace}/${invocation.method}:${parameter.name}`,
-        schema: parameterSchema('freeObject'),
+        create: () => parameterSchema('freeObject'),
       },
     })),
     ...(invocation.cancellable ? { cancellation: { parameter: 'signal' } } : {}),
     result: {
       mode: 'strict',
       typeSymbol: `${WORKSPACE_PROFILE_PACKAGE}#${namespace}/${invocation.method}:result`,
-      schema: valueSchema('freeObject'),
+      create: () => valueSchema('freeObject'),
     },
   }));
 }

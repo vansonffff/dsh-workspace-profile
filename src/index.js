@@ -45,7 +45,7 @@
 import Schema from '@deepseek-ai/schemastery';
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths';
 
-import { CompositionStore, CompositionDocumentSchema, SETTINGS_NS } from './settings.js';
+import { CompositionStore, SETTINGS_NS } from './settings.js';
 import { WorkspaceResolver } from './workspace-resolution.js';
 import { MatterResolver } from './matter-resolution.js';
 import { ModelCatalog } from './model-catalog.js';
@@ -73,6 +73,8 @@ export const name = 'workspace-profile';
 export const Config = Schema.object({
   /** Whether the plugin activates at all. */
   enabled: Schema.boolean().default(true),
+  /** Workspace policy lives in the Profile plugin config on DSH 0.1.7. */
+  document: Schema.any().volatile(),
 });
 
 /** Absolute path of this package, used to locate the Profile texts. */
@@ -271,8 +273,8 @@ export function apply(ctx, config = {}) {
 
   // ── settings ──────────────────────────────────────────────────────────────
   ctx.inject(['settings'], (settingsCtx) => {
-    const scope = settingsCtx.settings.register(SETTINGS_NS, CompositionDocumentSchema, { applies: 'live' });
-    store = new CompositionStore({ provider: settingsCtx.settings, scope, logger, now });
+    settingsCtx.effect(() => settingsCtx.settings.configure({ auto: false }));
+    store = new CompositionStore({ provider: settingsCtx.settings, ctx: settingsCtx, logger, now });
 
     const read = store.read();
     if (read.error !== undefined) {
@@ -289,7 +291,7 @@ export function apply(ctx, config = {}) {
     // catalog: the next step of every Agent then re-reads the new policy, which
     // is exactly the "takes effect from the next Agent step" contract — no
     // history is rewritten and no running turn is interrupted.
-    scope.watch(() => {
+    store.watch(() => {
       readiness = new WeakMap();
       catalog.invalidate();
       ctx.emit?.('workspace-profile/policy-changed');

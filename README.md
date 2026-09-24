@@ -265,7 +265,7 @@ docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILEST
 
 ## Requirements
 
-`@deepseek-ai/dsh` `0.1.5-rc.1`. There is no bundler and no build step: the host
+`@deepseek-ai/dsh` `0.1.7-rc.1` (locally verified). There is no bundler and no build step: the host
 half is plain ESM with JSDoc, and the browser half is a classic script that
 `require`s only `react` and `react/jsx-runtime` from the platform seed.
 

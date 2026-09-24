@@ -3,24 +3,19 @@
  *
  * ## Why the schema is permissive
  *
- * `SettingsProvider.register` validates the *stored* section and, when it fails,
- * **rejects the registration itself**. A strict schema therefore has a failure
- * mode worse than the corruption it guards against: a user hand-edits
- * `settings.yaml`, registration throws inside a `ctx.inject` callback, Cordis
- * contains the throw, and the namespace silently never exists — so the Settings
- * page that would have let them fix it has nothing to write to.
+ * Since DSH 0.1.7 the document is a volatile field of this plugin's Profile
+ * config. Settings projects that field into a form and writes through the
+ * Profile's ConfigEditor. The schema remains permissive so an older or manually
+ * edited document can still be displayed and repaired by policy normalization.
  *
- * The schema here therefore only declares the document's *shape* and its
- * defaults; every value is `Schema.any()`, so no stored section can fail it.
+ * This schema describes the document's shape for local callers; the active
+ * plugin Config declares `document: Schema.any().volatile()`.
  * Validation lives in {@link module:dsh-workspace-profile/policy}, runs on every
  * read, and repairs toward safety rather than throwing. Writes are validated
  * before they are issued, so nothing invalid is ever stored by this plugin.
  *
- * A consequence worth naming: `describe()` reports a schema with no field
- * detail, so this namespace contributes no generic schema-driven form. That is
- * intended — the plugin ships its own Settings section — and it is also why
- * `dsh-client-ui-settings-plugins` renders nothing for this namespace (it
- * dispatches one card key per namespace, and no card is registered for ours).
+ * The plugin registers its own Settings section and disables the generic form
+ * for this entry with `settings.configure({ auto: false })`.
  *
  * @module dsh-workspace-profile/settings
  */
@@ -50,12 +45,11 @@ export { SETTINGS_NS };
 /**
  * The plugin's view of its own settings section.
  *
- * Holds the owner scope (reads and observation) and the provider (revision and
- * path-addressed writes) together, because a revision-aware write needs both and
- * splitting them across call sites is how a stale write gets issued.
+ * Reads and writes the plugin's `document` field through the Profile Settings
+ * service. Revision checks remain owned by Settings, including concurrent edits
+ * from another window.
  *
- * Every method is total: when the namespace is not registered (no settings
- * provider in this composition, or registration was refused) reads answer with
+ * Every method is total: when the plugin entry is unavailable reads answer with
  * an empty document and writes reject with a named error rather than throwing a
  * property access.
  */
@@ -63,13 +57,13 @@ export class CompositionStore {
   /**
    * @param {object} deps - the provider and the owner scope.
    * @param {any} deps.provider - the `ctx.settings` provider.
-   * @param {any} deps.scope - the {@link SettingsScope} returned by `register`.
+   * @param {any} deps.ctx - the plugin context used to observe Settings changes.
    * @param {{ info: Function, warn: Function, error: Function }} [deps.logger] - diagnostics sink.
    * @param {() => string} [deps.now] - clock, injectable for tests.
    */
-  constructor({ provider, scope, logger, now }) {
+  constructor({ provider, ctx, logger, now }) {
     /** @private */ this.provider = provider;
-    /** @private */ this.scope = scope;
+    /** @private */ this.ctx = ctx;
     /** @private */ this.logger = logger;
     /** @private */ this.now = now ?? (() => new Date().toISOString());
     /**
@@ -94,7 +88,9 @@ export class CompositionStore {
   read() {
     let raw;
     try {
-      raw = this.scope.get();
+      const descriptor = this.provider.describe().find((entry) => entry.ns === SETTINGS_NS);
+      if (descriptor === undefined) throw new Error('workspace-profile is absent from Settings');
+      raw = descriptor.value?.document;
     } catch (error) {
       // A getter throw here means the provider is mid-swap; the previous value
       // is still the best answer, and saying so beats an empty document that
@@ -111,12 +107,10 @@ export class CompositionStore {
   }
 
   /**
-   * The revision of the raw stored section.
+   * The revision of the active plugin Config form.
    *
    * Read from `describe()` rather than tracked locally: the provider owns the
-   * counter, and a locally incremented guess would report a revision that a
-   * concurrent external edit (the settings document is watched and hot-reloaded)
-   * has already moved past — which is precisely the write this must refuse.
+   * counter, including edits made in another window.
    *
    * @returns {number|undefined} the revision, or `undefined` when the namespace
    *   is not registered (and therefore cannot be written at all).
@@ -133,9 +127,9 @@ export class CompositionStore {
   /**
    * Apply path-addressed edits, fenced by the revision the caller read.
    *
-   * Path ops, not a wholesale replacement: a Settings page holds the redacted
-   * document, and `mutate` applies each op to the section as it stands when the
-   * write reaches the front of the queue — so a caller never has to restate
+   * Path ops, not a wholesale replacement: `mutate` applies each op under the
+   * plugin's `document` field when the write reaches the front of the queue,
+   * so a caller never has to restate
    * fields it did not touch, and cannot delete a field it never saw.
    *
    * @param {ReadonlyArray<{op: 'set', path: readonly string[], value: unknown}|{op: 'unset', path: readonly string[]}>} ops - the edits.
@@ -156,7 +150,11 @@ export class CompositionStore {
         'workspace-profile writes must carry the expectedRevision they read; an unconditional write would silently overwrite a concurrent edit',
       );
     }
-    await this.provider.mutate(SETTINGS_NS, ops, expectedRevision);
+    await this.provider.mutate(
+      SETTINGS_NS,
+      ops.map((op) => ({ ...op, path: ['document', ...op.path] })),
+      expectedRevision,
+    );
     const next = this.revision();
     return next ?? expectedRevision + 1;
   }
@@ -168,8 +166,8 @@ export class CompositionStore {
    * @returns {() => void} the disposer.
    */
   watch(callback) {
-    return this.scope.watch((next, prev) => {
-      callback(next, prev);
+    return this.ctx.on('settings/document-updated', (namespace) => {
+      if (namespace === SETTINGS_NS) callback();
     });
   }
 
@@ -185,8 +183,9 @@ export class CompositionStore {
    * @returns {Promise<boolean>} whether the write was applied.
    */
   async persistNormalized(document, expectedRevision) {
+    if (typeof expectedRevision !== 'number') return false;
     try {
-      await this.provider.replace(SETTINGS_NS, document, expectedRevision);
+      await this.provider.update(SETTINGS_NS, { document }, expectedRevision);
       return true;
     } catch (error) {
       // A failed repair must not fail the boot: the in-memory document is

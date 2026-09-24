@@ -55,14 +55,14 @@ export function buildClientDescriptors(schema) {
       codec: {
         mode: 'strict',
         typeSymbol: `${WORKSPACE_PROFILE_PACKAGE}#${namespace}/${invocation.method}:${parameter.name}`,
-        schema: schema('freeObject'),
+        create: () => schema('freeObject'),
       },
     })),
     ...(invocation.cancellable ? { cancellation: { parameter: 'signal' } } : {}),
     result: {
       mode: 'strict',
       typeSymbol: `${WORKSPACE_PROFILE_PACKAGE}/${namespace}#${invocation.method}:result`,
-      schema: schema('freeObject'),
+      create: () => schema('freeObject'),
     },
   }));
 }

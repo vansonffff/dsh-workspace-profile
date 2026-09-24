@@ -4,21 +4,19 @@
  *
  * This is the Phase 0 compatibility gate expressed as a test rather than as a
  * document. Every seam the plugin depends on is the shipping implementation —
- * `SettingsProvider`, `SkillRegistry`, `SystemPrompt`, `CommandRuntime`,
+ * `SettingsForms`, `SkillRegistry`, `SystemPrompt`, `CommandRuntime`,
  * `ToolRuntime`, `TypertRegistry` — so a contract change in any of them fails
  * here instead of in the browser.
  *
- * What is deliberately *not* faked: the repositories. `SettingsProvider` is
- * subclassed only for storage (an in-memory map instead of a YAML file), which
- * is the one dependency a unit test cannot supply and the one that carries no
- * contract this plugin relies on beyond `load`/`persist`.
+ * `SettingsForms` is subclassed only for document storage/description, since a
+ * Profile patch file is not present in this in-memory composition.
  */
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { Context } from '@deepseek-ai/cordis';
-import { SettingsProvider } from '@deepseek-ai/dsh-settings';
+import { SettingsForms } from '@deepseek-ai/dsh-settings';
 import { SkillRegistry } from '@deepseek-ai/dsh-skill';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { CommandRuntime } from '@deepseek-ai/dsh-commands';
@@ -45,22 +43,13 @@ async function settle() {
 }
 
 /** An in-memory settings document: the same seam, different bytes. */
-class MemorySettingsProvider extends SettingsProvider {
+class MemorySettingsProvider extends SettingsForms {
   constructor(ctx, doc) {
     super(ctx);
     this.doc = doc ?? {};
-    // `[Service.init]` is the loader's hook; a directly constructed provider
-    // publishes its first document itself.
-    this.publish(this.doc);
   }
-  get writable() {
-    return true;
-  }
-  async load() {
-    return this.doc;
-  }
-  async persist(ns, section) {
-    this.doc = { ...this.doc, [ns]: section };
+  describe() {
+    return [{ ns: SETTINGS_NS, value: { document: this.doc[SETTINGS_NS] ?? {} }, revision: 0 }];
   }
 }
 
@@ -72,6 +61,8 @@ class MemorySettingsProvider extends SettingsProvider {
  */
 function makeComposition(options = {}) {
   const ctx = new Context();
+  ctx.root.loader = { await: async () => {} };
+  ctx.provide('profileContext', { home: '/dsh-workspace-profile-test-no-legacy-settings' });
   const settings = new MemorySettingsProvider(ctx, options.document);
   const skills = new SkillRegistry(ctx, {});
   const systemPrompt = new SystemPrompt(ctx, {});
