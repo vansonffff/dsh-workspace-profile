@@ -17,7 +17,9 @@
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 import { REMOTE_INVOCATIONS } from '../src/remote/invocations.js';
@@ -1753,4 +1755,165 @@ test('a mismatch is reported as a mismatch, and changes nothing', async () => {
   // The read is a read: no savePolicy call was made on its behalf.
   assert.deepEqual(calls.filter((call) => call.savePolicy !== undefined), []);
   assert.ok(calls.some((call) => call.matter !== undefined), 'and it did ask the Host');
+});
+
+/* -------------------------------------------------------------------------- */
+/* Subagent templates                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The bundle's exported templates, from the module the browser would load.
+ *
+ * @returns {any[]} the template list.
+ */
+function templates() {
+  const entry = loadBundle();
+  assert.ok(Array.isArray(entry.exports.SUBAGENT_TEMPLATES), 'the bundle exports its templates');
+  return entry.exports.SUBAGENT_TEMPLATES;
+}
+
+/**
+ * The slice of the bundle around the create dialog's template control.
+ *
+ * @returns {string} the dialog source fragment.
+ */
+function dialogSource() {
+  const at = SOURCE.indexOf('function SubagentDialog');
+  assert.ok(at !== -1, 'the Subagent dialog is still in the bundle');
+  return SOURCE.slice(at, at + 9000);
+}
+
+/**
+ * The `deepseek-official` model ids the local DSH installation declares.
+ *
+ * The catalogue is read at test time rather than copied into this file: a copy
+ * would keep passing after the installation renamed a model, which is exactly
+ * the failure the route preflight would then report in the browser.
+ *
+ * @returns {Promise<string[]|null>} the ids, or `null` when no local install is readable.
+ */
+async function installationDeepSeekModelIds() {
+  let here;
+  try {
+    here = fileURLToPath(import.meta.url);
+  } catch {
+    return null;
+  }
+  const candidates = [
+    // A checkout of the DSH installation, when one is named.
+    process.env.DSH_CHECKOUT
+      ? path.join(process.env.DSH_CHECKOUT, 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js')
+      : null,
+    // The platform packages this repository links for its tests, and the two
+    // places a working installation actually keeps them: the global npm prefix
+    // and the DSH home's own profile node_modules.
+    path.join(path.dirname(here), '..', 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'),
+    path.join(path.dirname(here), '..', '..', '..', '.npm-global', 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'),
+    path.join(process.env.HOME ?? '', '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js'),
+  ].filter((candidate) => candidate !== null);
+  for (const candidate of candidates) {
+    try {
+      const text = await readFile(candidate, 'utf8');
+      const ids = [...text.matchAll(/id: "(deepseek-[a-z0-9-]+)"/g)].map((match) => match[1]);
+      if (ids.length > 0) return [...new Set(ids)];
+    } catch {
+      // Try the next candidate; `null` is reported as "covered by the live
+      // preflight" rather than as a failure of the template.
+    }
+  }
+  return null;
+}
+
+test('a template is a form preset, never a stored definition', () => {
+  const list = templates();
+  assert.ok(list.length > 0, 'there is at least one template');
+  for (const template of list) {
+    // `id` here names the *template* in the dropdown. The definition's id is the
+    // Host's to assign, asserted where it matters: the form patch must not carry
+    // one, or "create from template" would become an edit.
+    assert.match(template.id, /^[a-z0-9][a-z0-9-]{0,63}$/, 'a template id is a stable, addressable name');
+    assert.equal('enabled' in template, false, `${template.id}: enabled is the user's answer, not a preset's`);
+    assert.match(template.key, /^[a-z0-9][a-z0-9-]{0,63}$/, `${template.id}: key must satisfy the Host's key grammar`);
+    assert.ok(template.name.trim() !== '', `${template.id}: name is required by createDefinition`);
+    assert.ok(template.description.trim() !== '', `${template.id}: description is what the model reads when choosing`);
+    assert.ok(template.provider.trim() !== '', `${template.id}: provider is required`);
+    assert.ok(template.model.trim() !== '', `${template.id}: model is required`);
+    assert.ok(template.label.trim() !== '', `${template.id}: label is what the dropdown shows`);
+  }
+  const ids = list.map((template) => template.id);
+  // JSON round-trip: the bundle runs in its own vm realm, so its arrays fail
+  // `deepEqual` on prototype identity rather than on content.
+  assert.deepEqual(JSON.parse(JSON.stringify(ids)), [...new Set(ids)], 'template ids are unique');
+});
+
+test('the two configured templates keep the routes they were given', () => {
+  const list = templates();
+  const reviewer = list.find((template) => template.id === 'reviewer');
+  const assist = list.find((template) => template.id === 'assist');
+  assert.ok(reviewer !== undefined, 'the independent reviewer template exists');
+  assert.ok(assist !== undefined, 'the legal assistant template exists');
+
+  assert.deepEqual(
+    { key: reviewer.key, name: reviewer.name, provider: reviewer.provider, model: reviewer.model, effort: reviewer.reasoningEffort },
+    { key: 'reviewer', name: '独立评审员', provider: 'kimi-coding', model: 'k3', effort: 'max' },
+  );
+  // `deepseek-flash` is the model id; "DeepSeek-V41-Flash" is only its display
+  // name. Writing the display name in a template is the mistake this pins down:
+  // it looks right on the Models page and then fails the preflight.
+  assert.deepEqual(
+    { key: assist.key, name: assist.name, provider: assist.provider, model: assist.model, effort: assist.reasoningEffort },
+    { key: 'assist', name: '律师助理', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' },
+  );
+});
+
+test('a template route names a model the installation actually declares', async () => {
+  const ids = await installationDeepSeekModelIds();
+  if (ids === null) return; // no local catalogue to read; the live preflight still covers it
+  for (const template of templates()) {
+    if (template.provider !== 'deepseek-official') continue;
+    assert.ok(ids.includes(template.model),
+      `${template.id}: "${template.model}" is not one of the deepseek-official model ids (${ids.join(', ')})`);
+  }
+});
+
+test('applying a template overwrites the fields it owns and nothing else', () => {
+  const entry = loadBundle();
+  const patch = entry.exports.templateFormPatch;
+  assert.equal(typeof patch, 'function', 'the bundle exports the form patch builder');
+  const assist = templates().find((template) => template.id === 'assist');
+  const result = patch(assist);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    key: 'assist',
+    name: '律师助理',
+    description: assist.description,
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+    reasoningEffort: 'max',
+    instructions: '',
+  });
+  // The two fields a preset must never carry. `id` would turn a create into an
+  // edit of whichever definition already holds it; `enabled` would overrule the
+  // person creating the agent on a question only they are answering.
+  assert.equal('id' in result, false, 'a template cannot turn a create into an edit');
+  assert.equal('enabled' in result, false, 'a template cannot choose whether the agent starts enabled');
+  // Empty is a value, not "leave it alone": a template that adds no extra
+  // guidance has to be able to say so.
+  assert.equal(result.instructions, '', 'an empty template field clears the field');
+});
+
+test('the create dialog offers the templates and the edit dialog does not', () => {
+  // Source-level by necessity: the dialog is closed in every static tree this
+  // harness can build, so what is pinned here is the wiring — create-only,
+  // placeholder first, and the change handler that applies a template. The
+  // browser observation then exercises the result.
+  const source = dialogSource();
+  assert.match(source, /const \[templateId, setTemplateId\] = useState\(''\)/,
+    'the control starts with no template selected');
+  assert.match(source, /created\s*\?\s*jsxs\('div', \{ className: C\.fieldStack, children: \[[\s\S]{0,400}?t\('fTemplate'\)/,
+    'the template control renders only when creating');
+  assert.match(source, /\[jsx\('option', \{ key: '', value: '', children: t\('templateNone'\) \}\)\]\.concat\(\s*SUBAGENT_TEMPLATES\.map\(/,
+    'the placeholder comes first, so "no template" is the initial state');
+  assert.match(source, /onChange: \(event\) => applyTemplate\(event\.target\.value\)/,
+    'selecting a template applies it');
 });

@@ -140,6 +140,22 @@ A person can call the same dispatcher directly:
 Both go through one lifecycle, so the route preflight, the depth cap, cancellation
 and disposal cannot drift apart between them.
 
+**Templates when creating one.** 添加子 Agent opens with a **模板** dropdown
+holding a few factory presets — today 独立评审员 (`reviewer`, `kimi-coding/k3 · max`)
+and 律师助理 (`assist`, `deepseek-official/deepseek-flash · max`). Picking one fills
+name, key, description, route and guidance; nothing is saved until you press 创建,
+and every field stays editable. A template is a *starting point*, so it carries no
+`id` (the Host assigns that, and a template with one would turn every create into
+an edit of the same Subagent) and no `enabled` (whether an agent starts enabled is
+your answer, not a preset's). The route it suggests is preflighted live in the same
+dialog: if that model is not available in this deployment, the dialog says so rather
+than silently substituting one.
+
+They live in `client.js` rather than the host half on purpose: a template is
+pre-fill material — nothing to persist, nothing to sync across machines — and its
+route is validated by the live preflight anyway, so keeping it in the browser bundle
+means editing a template does **not** require restarting the Host.
+
 **The working stance, per session.** `/perspective` reads or moves the position
 *this session* works from, without touching what the Workspace is configured to do:
 
@@ -259,8 +275,8 @@ client.js            the Settings section (classic script, no bundler)
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition, plus
                        matter-probe.mjs and matter-yaml-golden.py for the Matter reader
-test/                220 tests, and fixtures/ holding the PyYAML golden pair
-docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2
+test/                230 tests, and fixtures/ holding the PyYAML golden pair
+docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3
 ```
 
 ## Requirements
@@ -287,7 +303,7 @@ loudly on any it cannot find, so it cannot paper over a dependency that was neve
 declared. Then:
 
 ```bash
-node --test "test/*.test.js"                             # 198 tests
+node --test "test/*.test.js"                             # 230 tests
 ```
 
 Probes that need a real booted composition. They each **require** an explicit
@@ -341,6 +357,15 @@ node scripts/matter-yaml-golden.py       # needs Python + PyYAML; see --help
 - [`docs/MILESTONE-0.2.md`](docs/MILESTONE-0.2.md) — Matter integration: reading a
   CaseBench `matter.yaml`, comparing it with the Workspace, and why the reader
   refuses rather than guesses.
+- [`docs/MILESTONE-0.3.md`](docs/MILESTONE-0.3.md) — Subagent factory templates,
+  why they live in the browser half, and the `deepseek-v41-flash` correction.
+
+## Release
+
+Current version: **0.3.0** (`package.json` is the single source of truth). What
+changed in each release, and what was deliberately not done, is in
+[`CHANGELOG.md`](CHANGELOG.md); tagged releases are on
+[GitHub](https://github.com/vansonffff/dsh-workspace-profile/releases).
 
 ## Licence
 

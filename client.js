@@ -520,6 +520,83 @@ window.__ModuleLoader__.load({
       previewSection: { display: 'flex', flexDirection: 'column', gap: 4 },
     };
 
+    // ── Subagent templates ──────────────────────────────────────────────────
+    /**
+     * Factory presets for the 添加子 Agent dialog.
+     *
+     * Each entry pre-fills the create form; it is **not** a stored definition.
+     * Nothing here carries an `id`: the Host assigns ids, and a template that
+     * arrived with one would turn every "create from template" into an edit of
+     * the same Subagent. `reasoningEffort` is likewise a suggestion — the route
+     * is preflighted live in the dialog, so a model that has gone away reports
+     * itself instead of being silently substituted.
+     *
+     * `description` is copied from the owner's own wording, never paraphrased:
+     * it is the line the model reads when choosing an agent, so a rewrite here
+     * would quietly change whom the dispatcher picks.
+     *
+     * Module-level and exported on purpose. The create dialog only renders while
+     * it is open, and the browser test harness builds a static tree, so a
+     * template's correctness cannot be observed through that tree — it can be
+     * observed here, where it is data.
+     *
+     * @type {ReadonlyArray<{ id: string, label: string, key: string, name: string, description: string, provider: string, model: string, reasoningEffort: string, instructions: string }>}
+     */
+    const SUBAGENT_TEMPLATES = [
+      {
+        id: 'reviewer',
+        label: '独立评审员',
+        key: 'reviewer',
+        name: '独立评审员',
+        description: '以外部身份独立评审法律观点或法律文书：不预设原结论正确，主动寻找反例与漏洞，指出依据不足之处，并区分「已查明事实／主张／推断／未知」。',
+        provider: 'kimi-coding',
+        model: 'k3',
+        reasoningEffort: 'max',
+        instructions: '',
+      },
+      {
+        id: 'assist',
+        label: '律师助理',
+        key: 'assist',
+        name: '律师助理',
+        description: '承担整理文件、摘要、时间线、当事人信息整理、初步问题识别，以及格式、表格、数据转换与普通检索等大批量重复任务。',
+        provider: 'deepseek-official',
+        model: 'deepseek-flash',
+        reasoningEffort: 'max',
+        instructions: '',
+      },
+    ];
+
+    /**
+     * The patch a template contributes to the create form.
+     *
+     * A full overwrite of the fields a template owns, not a merge: picking a
+     * template is a deliberate act, and quietly keeping a field from whatever was
+     * typed before would produce a Subagent that is neither the template nor the
+     * user's own text. Empty string is a real value — the templates carry empty
+     * `instructions`, and "this template adds no extra guidance" has to be
+     * sayable rather than silently meaning "keep the old text".
+     *
+     * `enabled` is deliberately absent: whether a new agent starts enabled is the
+     * user's answer, not a preset's. `id` is absent for the same class of reason —
+     * the Host assigns it, and an edit must never be the result of "create from
+     * template".
+     *
+     * @param {{ key: string, name: string, description: string, provider: string, model: string, reasoningEffort: string, instructions: string }} template - one entry of {@link SUBAGENT_TEMPLATES}.
+     * @returns {{ key: string, name: string, description: string, provider: string, model: string, reasoningEffort: string, instructions: string }} the form patch.
+     */
+    function templateFormPatch(template) {
+      return {
+        key: template.key,
+        name: template.name,
+        description: template.description,
+        provider: template.provider,
+        model: template.model,
+        reasoningEffort: template.reasoningEffort,
+        instructions: template.instructions,
+      };
+    }
+
     // ── copy ────────────────────────────────────────────────────────────────
     const DICTS = {
       zh: {
@@ -629,6 +706,9 @@ window.__ModuleLoader__.load({
         editTitle: '编辑子 Agent',
         fName: '名称',
         fKey: 'Key',
+        fTemplate: '模板',
+        templateNone: '不用模板 —',
+        templateHint: '选中即填入下列字段，保存前都可以改。模板只是建议值，不会替你保存。',
         fRoute: 'Route',
         fProvider: 'Provider',
         fModel: 'Model',
@@ -656,7 +736,6 @@ window.__ModuleLoader__.load({
         conflict: '配置已被其他窗口修改，本次保存未写入。',
         noWorkspaceSelected: '请选择左侧的工作区。',
         capabilityMissing: '当前部署缺少所需服务：',
-        revision: '配置版本',
       },
       en: {
         nav: 'Workspaces',
@@ -765,6 +844,11 @@ window.__ModuleLoader__.load({
         editTitle: 'Edit subagent',
         fName: 'Name',
         fKey: 'Key',
+        fTemplate: 'Template',
+        templateNone: 'No template —',
+        // Template labels, names and descriptions stay Chinese in every locale:
+        // they are content the owner wrote, not UI copy this dictionary owns.
+        templateHint: 'Fills the fields below; everything stays editable before saving. A template is a suggestion, never a saved definition.',
         fRoute: 'Route',
         fProvider: 'Provider',
         fModel: 'Model',
@@ -792,7 +876,6 @@ window.__ModuleLoader__.load({
         conflict: 'The configuration changed in another window; this save was not written.',
         noWorkspaceSelected: 'Select a workspace on the left.',
         capabilityMissing: 'This deployment is missing: ',
-        revision: 'Revision',
       },
     };
 
@@ -1616,9 +1699,6 @@ window.__ModuleLoader__.load({
                 children: hasStoredPolicy(selected) ? t('configured') : t('unconfigured'),
               })
             : null,
-          snapshot !== null && snapshot.revision !== null
-            ? jsx('span', { className: C.badge, children: t('revision') + ' ' + snapshot.revision })
-            : null,
         ] }),
 
         workspaces.length === 0
@@ -2111,6 +2191,12 @@ window.__ModuleLoader__.load({
       }));
       const [route, setRoute] = useState(null);
       const [busy, setBusy] = useState(false);
+      /**
+       * Which template is selected. Held only so the control can show what was
+       * picked: choosing a template writes the fields and nothing more, so the
+       * form stays the single source of truth for what will be saved.
+       */
+      const [templateId, setTemplateId] = useState('');
 
       const providers = (models && models.providers) || [];
       const provider = providers.find((entry) => entry.provider === form.provider) || null;
@@ -2118,6 +2204,22 @@ window.__ModuleLoader__.load({
       const efforts = modelEntry ? modelEntry.efforts || [] : [];
 
       const update = useCallback((patch) => setForm((current) => Object.assign({}, current, patch)), []);
+
+      /**
+       * Apply a factory template to the form.
+       *
+       * The patch itself comes from {@link templateFormPatch}, which the tests
+       * assert directly: this dialog only exists while it is open, so a rule
+       * living only here would be unobservable to anything but a real browser.
+       */
+      const applyTemplate = useCallback((id) => {
+        setTemplateId(id);
+        const template = SUBAGENT_TEMPLATES.find((entry) => entry.id === id);
+        // Choosing the placeholder clears the selection without touching what
+        // was typed: there is nothing to restore it from.
+        if (template === undefined) return;
+        update(templateFormPatch(template));
+      }, [update]);
 
       // Live route verdict. Cheap, and the difference between finding out here and
       // finding out when a delegation has already been paid for.
@@ -2162,6 +2264,33 @@ window.__ModuleLoader__.load({
         onClick: (event) => { if (event.target === event.currentTarget) onCancel(); },
         children: jsxs('div', { className: C.modalPanel, 'data-workspace-profile': 'dialog', children: [
           jsx('h3', { className: C.modalTitle, children: created ? t('addTitle') : t('editTitle') }),
+
+          // Factory templates, offered here rather than in the list: a template
+          // is a way to *start* a definition, and this dialog is where one
+          // starts. Field order is untouched — the template writes the fields
+          // below, so it sits above them. A dropdown, not a row of buttons,
+          // because labels are Chinese and the field/Key row below is only
+          // 205px per column; buttons would wrap into a second line.
+          created
+            ? jsxs('div', { className: C.fieldStack, children: [
+                jsx('label', { className: C.fieldStackLabel, children: t('fTemplate') }),
+                jsx('select', {
+                  className: C.control,
+                  style: s.select,
+                  'aria-label': t('fTemplate'),
+                  value: templateId,
+                  onChange: (event) => applyTemplate(event.target.value),
+                  children: [jsx('option', { key: '', value: '', children: t('templateNone') })].concat(
+                    SUBAGENT_TEMPLATES.map((template) => jsx('option', {
+                      key: template.id,
+                      value: template.id,
+                      children: template.label,
+                    })),
+                  ),
+                }),
+                jsx('div', { className: C.fieldStackHint, children: t('templateHint') }),
+              ] })
+            : null,
 
           // Name and key side by side: on one line each they were two full-width
           // rows for two short values, which is most of why this dialog felt cramped
@@ -2508,6 +2637,10 @@ window.__ModuleLoader__.load({
     exports.DICTS = DICTS;
     exports.TYPERT_REMOTE = TYPERT_REMOTE;
     exports.INVOCATIONS = INVOCATIONS;
+    // Exported so the tests can assert the templates as data: the dialog that
+    // renders them is closed in every static tree, so nothing else can see them.
+    exports.SUBAGENT_TEMPLATES = SUBAGENT_TEMPLATES;
+    exports.templateFormPatch = templateFormPatch;
     return module.exports;
   },
 });

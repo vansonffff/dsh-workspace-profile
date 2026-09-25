@@ -65,7 +65,21 @@ renders the gaps rather than a control that fails.
 | `src/instructions-probe.js` | AGENTS.md *presence* for the Settings page | nothing |
 | `src/remote/operations.js` | the business operations behind the Remote | most of the above |
 | `src/service.js` | the `TypertRemoteService` and its `remoteX` aliases | `dsh-typert-protocol` |
-| `client.js` | the Settings section | platform seed only |
+| `client.js` | the Settings section, and the Subagent factory templates | platform seed only |
+
+### Why the Subagent templates live in `client.js`
+
+`SUBAGENT_TEMPLATES` and `templateFormPatch` are browser-side on purpose. A template
+is pre-fill material for the create dialog: there is nothing to persist, nothing to
+share between machines, and its suggested route is validated by the dialog's live
+`validateRoute` call regardless of where the template was defined. Host-side
+placement would buy only a host unit test on the data's shape — and would cost a
+**Host restart for every template edit**, because the host half is a loader row
+fixed at assembly time. The client bundle hot-reloads.
+
+Both are exported from the bundle for the same reason the dialog is hard to test:
+the create dialog only renders while it is open, and the browser harness builds a
+static tree, so the rules have to be observable as data (see `test/client-bundle.test.js`).
 
 ## 4. Data flow
 
