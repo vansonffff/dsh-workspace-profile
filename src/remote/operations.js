@@ -70,6 +70,8 @@ import {
  * @param {() => any} deps.getResolver - the Workspace resolver.
  * @param {() => any} deps.getCatalog - the model catalog.
  * @param {() => any} deps.getSkills - the `skills` service, or `undefined`.
+ * @param {() => any} deps.getAgents - the `agents` registry, or `undefined`.
+ * @param {() => any} deps.getAgentPresets - the 0.1.7 `agentPresets` registry, or `undefined`.
  * @param {() => any} deps.getDispatcher - the unified dispatcher.
  * @param {() => string|undefined} deps.getDshHome - the harness home for the AGENTS probe.
  * @param {() => { profiles: Record<string,string>, perspectives: Record<string,Record<string,string>> }} deps.getProfileTexts
@@ -87,6 +89,7 @@ export function createOperations({
   getCatalog,
   getSkills,
   getAgents,
+  getAgentPresets,
   getScopeParent,
   getDispatcher,
   getDshHome,
@@ -271,10 +274,24 @@ export function createOperations({
       // about what this Workspace recommends.
       const recommendations = recommendedSkills(policy);
       const recommended = recommendations.map((entry) => entry.name);
-      // The preset layers of whatever agents are live in this Workspace. See
-      // `buildSkillCatalog` for why the preset layer and not the agent's own.
-      const scopes = presetScopesFor(getAgents(), workspaceId);
-      const result = await buildSkillCatalog({ skills, workspace, policy, recommended, scopes, signal });
+      // The preset layers a session in this Workspace would read. See
+      // `buildSkillCatalog` for why the preset layer and not the agent's own,
+      // and `resolveCatalogScopes` for why the 0.1.7 `agentPresets` registry is
+      // asked first: its standing scopes exist without a live Agent, and their
+      // keys stay inside the platform's dsh-scope instance.
+      const { scopes, leases } = await resolveCatalogScopes({ getAgents, getAgentPresets });
+      let result;
+      try {
+        result = await buildSkillCatalog({ skills, workspace, policy, recommended, scopes, signal });
+      } finally {
+        for (const lease of leases) {
+          try {
+            await lease[Symbol.asyncDispose]();
+          } catch {
+            // A lease that will not release must not fail the read it served.
+          }
+        }
+      }
       return {
         available: true,
         ...result,
@@ -294,15 +311,17 @@ export function createOperations({
          *
          * Reported rather than hidden because it changes what the list *means*. In
          * a Web deployment the local filesystem provider is mounted by an agent
-         * preset, so with no live session in this Workspace only the deployment's
-         * own Skills are visible — and the page must say that instead of letting
-         * "recommended but not installed" read as a fact.
+         * preset, not the deployment. On 0.1.7 the preset registry hands out a
+         * **standing** scope for the default preset, so the full catalog is
+         * visible without a live session; the note below is reserved for
+         * compositions where no preset scope could be obtained at all (a 0.1.5
+         * Host with no live session, or a broken preset).
          */
         scoped: scopes.length > 0,
         note:
           scopes.length > 0
             ? null
-            : '当前工作区没有正在运行的会话，因此这里只列出了部署级 Skill。项目与用户目录下的 Skill 由会话的 Agent 预设提供，在该工作区打开一个会话后刷新即可看到。',
+            : '拿不到任何 Agent 预设的技能层，因此这里只列出了部署级 Skill。项目与用户目录下的 Skill 由会话的 Agent 预设提供；在该工作区打开一个会话后刷新，或检查默认 Agent 预设是否可用。',
       };
     },
 
@@ -704,21 +723,99 @@ export function createOperations({
 }
 
 /**
- * The preset-layer scope keys of the live Agents working in one Workspace.
+ * Resolve the preset-layer scope keys the Skill catalog should be read through.
  *
- * `scopeParentOf(agent)` is the standing mount the Agent joined — an agent
- * preset's scope — and it is that layer's Skill contributions a Settings page
- * has to show. The Agent's own layer is deliberately excluded: it is where this
- * plugin's disable-shadows live, and a shadow wins the name.
+ * Two paths, in order:
  *
- * Deduplicated by identity, and bounded: a process with many live agents in one
- * Workspace contributes one read per distinct preset, not one per agent.
+ * 1. **The 0.1.7 `agentPresets` registry.** Every declared preset owns a
+ *    *standing* scope from the moment it is registered, so
+ *    `acquireScope(id)` answers without any live Agent, and
+ *    `acquireScope(undefined)` answers for the default preset — the one a new
+ *    session in the Workspace would join. Live Agents contribute their own
+ *    preset ids on top, resolved through `composedPreset(agent.ctx)`.
+ *
+ *    This is also the only path that works where the Host embeds its own copy
+ *    of the platform (the desktop app's asar): scope-parent bindings live in a
+ *    module-private `WeakMap`, so `scopeParentOf` asked through *this*
+ *    package's dsh-scope instance never sees a binding the platform's instance
+ *    recorded. `acquireScope` keeps both ends — minting the key and later
+ *    walking its chain inside `skills.snapshot` — in the platform's instance.
+ *
+ * 2. **The pre-0.1.7 fallback**: read each live Agent's preset layer through
+ *    this package's own `scopeParentOf`. Right on a Host whose modules this
+ *    package physically shares (the npm-installed `dsh web`), empty elsewhere.
+ *
+ * Acquired leases belong to the caller, who must dispose them once the read is
+ * done: each lease holds a `users` count that gates generation retirement.
+ *
+ * @param {object} input - the inputs.
+ * @param {() => any} input.getAgents - the `agents` registry thunk.
+ * @param {() => any} [input.getAgentPresets] - the `agentPresets` registry thunk.
+ * @returns {Promise<{ scopes: object[], leases: object[] }>} the scope keys to
+ *   read through and the leases to dispose afterwards.
+ */
+async function resolveCatalogScopes({ getAgents, getAgentPresets }) {
+  const presets = typeof getAgentPresets === 'function' ? getAgentPresets() : undefined;
+  if (presets === undefined || typeof presets.acquireScope !== 'function') {
+    return { scopes: presetScopesFor(getAgents?.()), leases: [] };
+  }
+  // Always the default preset — that is the layer a *new* session here joins —
+  // plus the preset of every live Agent that names one, so a session running
+  // on a non-default preset still contributes its layer.
+  const ids = new Set([undefined]);
+  if (typeof presets.composedPreset === 'function') {
+    for (const agent of liveAgents(getAgents?.())) {
+      try {
+        const id = agent?.ctx === undefined ? undefined : presets.composedPreset(agent.ctx);
+        if (typeof id === 'string' && id !== '') ids.add(id);
+      } catch {
+        // One unreadable Agent must not cost the whole list.
+      }
+    }
+  }
+  const scopes = [];
+  const leases = [];
+  for (const id of ids) {
+    try {
+      const lease = await presets.acquireScope(id);
+      leases.push(lease);
+      scopes.push(lease.key);
+    } catch {
+      // A broken or unknown preset is skipped, not fatal: the remaining scopes
+      // still answer, and `scoped` reports honestly how many layers were read.
+    }
+  }
+  return { scopes, leases };
+}
+
+/**
+ * Every live Agent, or none — tolerating an absent or throwing registry.
  *
  * @param {any} agents - the `agents` registry, or `undefined`.
- * @param {string} workspaceId - the Workspace being inspected.
+ * @returns {any[]} the live Agents.
+ */
+function liveAgents(agents) {
+  if (agents === undefined || typeof agents.list !== 'function') return [];
+  try {
+    return agents.list() ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The preset-layer scope keys of the live Agents — the pre-0.1.7 path.
+ *
+ * `scopeParentOf(agent)` is the standing mount the Agent joined — an agent
+ * preset's scope. The Agent's own layer is deliberately excluded: it is where
+ * this plugin's disable-shadows live, and a shadow wins the name. Only valid
+ * when this package and the Host share one physical dsh-scope instance; see
+ * {@link resolveCatalogScopes} for where that assumption breaks.
+ *
+ * @param {any} agents - the `agents` registry, or `undefined`.
  * @returns {object[]} the distinct preset scope keys.
  */
-function presetScopesFor(agents, workspaceId) {
+function presetScopesFor(agents) {
   if (agents === undefined || typeof agents.list !== 'function') return [];
   let live;
   try {

@@ -221,6 +221,12 @@ export function apply(ctx, config = {}) {
     getCatalog: () => catalog,
     getSkills,
     getAgents: () => ctx.get('agents'),
+    // 0.1.7's preset registry. Its standing preset scopes answer "which Skills
+    // would a session here see" without a live Agent, and — unlike reading
+    // scope parents through this package's own dsh-scope copy — its scope keys
+    // are produced and consumed inside the platform's module instance, so the
+    // lookup also works where the Host embeds its own copy (desktop asar).
+    getAgentPresets: () => ctx.get('agentPresets'),
     getDispatcher: () => dispatcher,
     getDshHome: () => dshHome,
     // The same texts the prompt sections read, so the Settings preview composes
