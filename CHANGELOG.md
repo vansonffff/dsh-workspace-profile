@@ -8,6 +8,25 @@ this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versions before 0.2.0 were developed in a private workspace and are not itemised
 here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
 
+## [0.4.0] — 2026-09-25
+
+### Added
+
+- **A third factory template: 码农 (`coding`)** — `deepseek-official/deepseek-flash` · max.
+  It takes the engineering work: reading and analysing a repository; locating,
+  reproducing and fixing bugs; writing or changing code; writing scripts; changing
+  project configuration; writing, running and fixing tests; refactoring; analysing
+  dependencies, interfaces and implementation mechanisms; and DSH-plugin and other
+  engineering development.
+
+  Its description is the owner's own list of duties, enumerated rather than
+  summarised: that line is what the model reads when deciding whether a request
+  belongs to this agent, and collapsing nine duties into "写代码" would hide
+  repository analysis and plugin work behind the same two words.
+
+  Unlike the two legal templates, this one is not domain-specific — it is offered
+  in every Workspace, including ones whose Profile is Litigation or Bankruptcy.
+
 ## [0.3.0] — 2026-09-25
 
 ### Added
@@ -110,6 +129,7 @@ here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
   cannot find.
 - Real client data was removed before this repository was published.
 
+[0.4.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.4.0
 [0.3.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.3.0
 [0.2.1]: https://github.com/vansonffff/dsh-workspace-profile/compare/2a87487...v0.3.0
 [0.2.0]: https://github.com/vansonffff/dsh-workspace-profile/compare/1949717...2a87487

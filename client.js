@@ -565,6 +565,21 @@ window.__ModuleLoader__.load({
         reasoningEffort: 'max',
         instructions: '',
       },
+      {
+        id: 'coding',
+        label: '码农',
+        key: 'coding',
+        name: '码农',
+        // The duties are the owner's own list, enumerated rather than collapsed
+        // into "write code": this line is read when deciding whether a request
+        // belongs to this agent, and a summary would hide repository analysis
+        // and DSH-plugin work behind the same two words.
+        description: '阅读并分析代码仓库；定位、复现并修复 Bug；编写或修改代码；编写脚本；修改工程配置；编写、运行并修复测试；重构；分析依赖、接口与实现机制；承接 DSH 插件及其他工程开发任务。',
+        provider: 'deepseek-official',
+        model: 'deepseek-flash',
+        reasoningEffort: 'max',
+        instructions: '',
+      },
     ];
 
     /**

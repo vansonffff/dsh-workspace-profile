@@ -141,9 +141,15 @@ Both go through one lifecycle, so the route preflight, the depth cap, cancellati
 and disposal cannot drift apart between them.
 
 **Templates when creating one.** 添加子 Agent opens with a **模板** dropdown
-holding a few factory presets — today 独立评审员 (`reviewer`, `kimi-coding/k3 · max`)
-and 律师助理 (`assist`, `deepseek-official/deepseek-flash · max`). Picking one fills
-name, key, description, route and guidance; nothing is saved until you press 创建,
+holding a few factory presets:
+
+| Template | Key | Route |
+|---|---|---|
+| 独立评审员 | `reviewer` | `kimi-coding/k3` · max |
+| 律师助理 | `assist` | `deepseek-official/deepseek-flash` · max |
+| 码农 | `coding` | `deepseek-official/deepseek-flash` · max |
+
+Picking one fills name, key, description, route and guidance; nothing is saved until you press 创建,
 and every field stays editable. A template is a *starting point*, so it carries no
 `id` (the Host assigns that, and a template with one would turn every create into
 an edit of the same Subagent) and no `enabled` (whether an agent starts enabled is
@@ -276,7 +282,7 @@ profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition, plus
                        matter-probe.mjs and matter-yaml-golden.py for the Matter reader
 test/                230 tests, and fixtures/ holding the PyYAML golden pair
-docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3
+docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3 · 0.4
 ```
 
 ## Requirements
@@ -359,10 +365,12 @@ node scripts/matter-yaml-golden.py       # needs Python + PyYAML; see --help
   refuses rather than guesses.
 - [`docs/MILESTONE-0.3.md`](docs/MILESTONE-0.3.md) — Subagent factory templates,
   why they live in the browser half, and the `deepseek-v41-flash` correction.
+- [`docs/MILESTONE-0.4.md`](docs/MILESTONE-0.4.md) — the 码农 (`coding`) template,
+  and why its duties stay an enumerated list.
 
 ## Release
 
-Current version: **0.3.0** (`package.json` is the single source of truth). What
+Current version: **0.4.0** (`package.json` is the single source of truth). What
 changed in each release, and what was deliberately not done, is in
 [`CHANGELOG.md`](CHANGELOG.md); tagged releases are on
 [GitHub](https://github.com/vansonffff/dsh-workspace-profile/releases).

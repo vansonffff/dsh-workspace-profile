@@ -1846,12 +1846,14 @@ test('a template is a form preset, never a stored definition', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(ids)), [...new Set(ids)], 'template ids are unique');
 });
 
-test('the two configured templates keep the routes they were given', () => {
+test('the configured templates keep the routes they were given', () => {
   const list = templates();
   const reviewer = list.find((template) => template.id === 'reviewer');
   const assist = list.find((template) => template.id === 'assist');
+  const coding = list.find((template) => template.id === 'coding');
   assert.ok(reviewer !== undefined, 'the independent reviewer template exists');
   assert.ok(assist !== undefined, 'the legal assistant template exists');
+  assert.ok(coding !== undefined, 'the coding template exists');
 
   assert.deepEqual(
     { key: reviewer.key, name: reviewer.name, provider: reviewer.provider, model: reviewer.model, effort: reviewer.reasoningEffort },
@@ -1864,6 +1866,17 @@ test('the two configured templates keep the routes they were given', () => {
     { key: assist.key, name: assist.name, provider: assist.provider, model: assist.model, effort: assist.reasoningEffort },
     { key: 'assist', name: '律师助理', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' },
   );
+  assert.deepEqual(
+    { key: coding.key, name: coding.name, provider: coding.provider, model: coding.model, effort: coding.reasoningEffort },
+    { key: 'coding', name: '码农', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' },
+  );
+  // The coding template's description is the owner's enumerated list of duties,
+  // and that list is what the model reads when choosing an agent. Checked as
+  // tokens rather than as one exact string so a punctuation fix does not fail
+  // the suite, while dropping a duty still does.
+  for (const duty of ['代码仓库', 'Bug', '脚本', '工程配置', '测试', '重构', '依赖', 'DSH 插件']) {
+    assert.ok(coding.description.includes(duty), `the coding template still covers ${duty}`);
+  }
 });
 
 test('a template route names a model the installation actually declares', async () => {
