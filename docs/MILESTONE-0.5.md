@@ -202,6 +202,33 @@ than worked around inside this round. The consequence: the settings card has not
 seen in the running GUI with the new copy; the acceptance for that is a restart plus
 a look at one of the affected Workspaces.
 
+### Acceptance (2026-09-26, desktop app, reported by the owner)
+
+The Host half was accepted by hand on the desktop app after a restart, which closes
+the paragraph above. The Matter card for the affected Workspace reads:
+
+```
+名称                 示例系列案件
+案件目录              …/My Legal-agents/示例系列案件      ← the new row: an ADDED directory
+Matter ID             11111111-…                        (matches matter.yaml)
+类型                  litigation
+正式角色              appellant
+程序阶段              unknown
+类型与工作区配置       一致
+正式角色与默认视角      一致
+```
+
+Two things this settles beyond "the bug is gone". The **案件目录** row is the added
+directory rather than the team drive, so the answer now says *which* directory it came
+from instead of leaving that in a log. And the verdicts are `一致`/`一致`, which is the
+value a Workspace configured for the Matter it actually holds must report — a page that
+had found the Matter but mis-mapped it would have shown a mismatch here.
+
+Not part of this acceptance: the Workspace whose added directory is the *parent* of
+several Matters still resolves nothing, by design; its fix is to declare the specific
+case directory. Stated again because it is the one place where "it still says no Matter"
+is the correct answer.
+
 ---
 
 ## Corrections to earlier records
