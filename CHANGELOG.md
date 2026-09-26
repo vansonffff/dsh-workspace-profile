@@ -44,6 +44,15 @@ here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
   single boundary path. `findMatter(start, { workspaceRoot })` becomes
   `findMatter(start, { roots })`; `resolvePath(path, workspaceRoot)` becomes
   `resolvePath(path, roots)`. Callers that passed one path pass `[path]`.
+- **The Chinese panel no longer has English-only labels.** Nine were: `Profile`,
+  `Matter ID`, `Global AGENTS`, `Project AGENTS.md`, `Key`, `Route`, `Provider`,
+  `Model`, `Reasoning Effort`. The convention is Chinese first with the English term
+  beside it where the reader meets that term elsewhere — `类型（Profile）`,
+  `Matter ID（案件标识）`, `标识（Key）`, `全局 AGENTS.md` — and Chinese alone in the
+  compact model-route row, where a longer label wraps and pushes its control out of
+  line (`提供方` / `模型` / `推理强度`, the last matching the platform's own wording).
+  `test/panel-copy.test.js` now fails the build on a new bare-English label and on a
+  key present in one bundle only.
 
 ## [0.4.0] — 2026-09-25
 

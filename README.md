@@ -311,7 +311,7 @@ client.js            the Settings section (classic script, no bundler)
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition, plus
                        matter-probe.mjs and matter-yaml-golden.py for the Matter reader
-test/                247 tests, and fixtures/ holding the PyYAML golden pair
+test/                250 tests, and fixtures/ holding the PyYAML golden pair
 docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3 · 0.4 · 0.5
 ```
 
