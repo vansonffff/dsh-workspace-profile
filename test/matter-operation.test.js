@@ -21,6 +21,13 @@
  * The last test is the one that generalises: it asserts the two readers of one
  * Workspace *agree*, which is the property that broke, rather than either answer
  * on its own.
+ *
+ * The same reasoning produced the second half of this file. A Workspace may
+ * declare additional directories, and the Matter frequently lives in one of them
+ * (`My Legal-agents/<案件>/matter.yaml` beside the team drive that holds the case
+ * files). Discovery was right there too — given a set of directories it searched
+ * them — but both callers passed a single path, so every real Workspace reported
+ * "no matter.yaml". These tests therefore drive the operation with a declared set.
  */
 
 import assert from 'node:assert/strict';
@@ -93,12 +100,17 @@ async function scratch(t) {
  *
  * @param {object} options - the fixture.
  * @param {string} options.path - the Workspace directory.
+ * @param {string[]} [options.dirs] - directories added to the Workspace, the way
+ *   `dsh-multi-project` records them.
  * @param {string} [options.profile] - the stored Profile for the Workspace.
  * @param {string} [options.defaultPerspective] - the stored Perspective.
- * @returns {{ operations: any, resolver: MatterResolver, workspace: any }} the wiring.
+ * @returns {{ operations: any, resolver: MatterResolver, workspace: any, roots: string[] }} the wiring.
  */
-function build({ path, profile = 'bankruptcy', defaultPerspective = 'administrator' }) {
+function build({ path, dirs = [], profile = 'bankruptcy', defaultPerspective = 'administrator' }) {
   const workspace = { id: 'ws-1', title: '测试工作区', path, sessionIds: [] };
+  // One declaration, handed to both readers — exactly as src/index.js does it. Two
+  // copies would let the agreement test pass while the plugin itself disagreed.
+  const roots = [path, ...dirs];
   const document = emptyDocument(NOW);
   document.workspaces[workspace.id] = {
     createdAt: NOW,
@@ -116,13 +128,14 @@ function build({ path, profile = 'bankruptcy', defaultPerspective = 'administrat
     logger: { warn() {}, info() {}, error() {} },
     // The Agent half of the agreement test. Real sessions resolve their Workspace
     // through the same describe() the Settings read uses.
-    workspacePathFor: () => workspace.path,
+    workspaceRootsFor: () => roots,
   });
 
   const operations = createOperations({
     getStore: () => store,
     getResolver: () => resolver,
     getMatterResolver: () => matterResolver,
+    getWorkspaceRoots: () => roots,
     getCatalog: () => undefined,
     getSkills: () => undefined,
     getAgents: () => [],
@@ -135,7 +148,7 @@ function build({ path, profile = 'bankruptcy', defaultPerspective = 'administrat
     logger: { warn() {}, info() {}, error() {} },
   });
 
-  return { operations, resolver: matterResolver, workspace };
+  return { operations, resolver: matterResolver, workspace, roots };
 }
 
 // ── the boundary ─────────────────────────────────────────────────────────────
@@ -227,4 +240,68 @@ test('the boundary is the Workspace itself, so a nested Matter is found', async 
 
   const agent = await resolver.resolveAgent({ session: { header: { cwd: join(path, 'sub') }, id: 's2' } });
   assert.equal(agent.facts.name, '子目录案件');
+});
+
+// ── the shape every real Workspace on this machine had ───────────────────────
+//
+// The Workspace's own directory holds the case files (a team drive) and the Matter
+// lives in a directory added to it. This is not an edge case to tolerate: it was
+// *every* registered Workspace, which is why the plugin reported "no matter.yaml"
+// for all of them at once.
+
+test('a Matter in a directory added to the Workspace is reported by both readers', async (t) => {
+  const base = await scratch(t);
+  const path = join(base, 'team-drive', '案件_1');
+  const productDir = join(base, 'My Legal-agents', '案件');
+  await mkdir(path, { recursive: true });
+  await mkdir(productDir, { recursive: true });
+  // A fixture name, never a real one: `no-client-data.test.js` scans this
+  // repository against the private workspace's own registry and fails the build
+  // when a case name is copied in — it caught the first draft of this test.
+  await writeMatter(productDir, { name: '示例系列案件' });
+
+  // Without the added directory this is the report that was filed: an ordinary
+  // "no matter.yaml" for a Workspace that does have a Matter.
+  const narrow = build({ path });
+  const before = await narrow.operations.matter({ workspaceId: narrow.workspace.id });
+  assert.equal(before.discovered, false, 'the primary directory alone is the old behaviour');
+  assert.deepEqual(before.searched, [path], 'and it says which directory it searched');
+
+  const { operations, resolver, workspace, roots } = build({ path, dirs: [productDir] });
+
+  const settings = await operations.matter({ workspaceId: workspace.id });
+  assert.equal(settings.discovered, true);
+  assert.equal(settings.matter.name, '示例系列案件');
+  assert.equal(settings.matter.root, productDir, 'the facts name the directory it was read from');
+  assert.deepEqual(settings.searched, roots, 'and the page can list every directory searched');
+
+  // The property that broke once already: two readers of one Workspace, one answer.
+  const agent = await resolver.resolveAgent({ session: { header: { cwd: path }, id: 's3' } });
+  assert.equal(agent.facts?.id, settings.matter.id);
+});
+
+test('two added directories holding two Matters are reported as a problem', async (t) => {
+  const base = await scratch(t);
+  const path = join(base, 'team-drive');
+  const addedA = join(base, 'a');
+  const addedB = join(base, 'b');
+  for (const dir of [path, addedA, addedB]) await mkdir(dir, { recursive: true });
+  await writeMatter(addedA, { name: '案件甲' });
+  await writeMatter(addedB, { id: 'ffffffff-0000-1111-2222-333333333333', name: '案件乙' });
+
+  const { operations, resolver, workspace } = build({ path, dirs: [addedA, addedB] });
+  const settings = await operations.matter({ workspaceId: workspace.id });
+
+  assert.equal(settings.discovered, false, 'one of them must not be chosen for the user');
+  assert.equal(settings.matter, null);
+  assert.match(settings.problem, /多个目录各有一个 matter\.yaml/);
+  // The match is still computed, on "unknown": the page must not read the absence
+  // of an answer as agreement.
+  assert.equal(settings.match.profile.verdict, 'unknown');
+  assert.match(settings.match.problems.join(''), /多个目录各有一个 matter\.yaml/);
+
+  // The Agent is told the same thing rather than a confident half of it.
+  const agent = await resolver.resolveAgent({ session: { header: { cwd: path }, id: 's4' } });
+  assert.equal(agent.facts, null);
+  assert.match(agent.problem, /多个目录各有一个 matter\.yaml/);
 });

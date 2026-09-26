@@ -68,6 +68,10 @@ import {
  * @param {object} deps - dependencies.
  * @param {() => any} deps.getStore - the composition store, or `undefined`.
  * @param {() => any} deps.getResolver - the Workspace resolver.
+ * @param {() => any} deps.getMatterResolver - the Matter resolver.
+ * @param {(workspaceId: string) => string[]} [deps.getWorkspaceRoots] - every
+ *   directory one Workspace covers: its own path first, then the ones added to
+ *   it. The same function the Agent path uses, so the two readers agree.
  * @param {() => any} deps.getCatalog - the model catalog.
  * @param {() => any} deps.getSkills - the `skills` service, or `undefined`.
  * @param {() => any} deps.getAgents - the `agents` registry, or `undefined`.
@@ -86,6 +90,7 @@ export function createOperations({
   getStore,
   getResolver,
   getMatterResolver,
+  getWorkspaceRoots,
   getCatalog,
   getSkills,
   getAgents,
@@ -367,7 +372,7 @@ export function createOperations({
      * because a file on disk changed would be making a professional judgement on
      * the user's behalf.
      *
-     * A Workspace whose directory holds no `matter.yaml` is not a failure. It
+     * A Workspace whose directories hold no `matter.yaml` is not a failure. It
      * answers `discovered: false`, which is what an ordinary project directory is.
      *
      * @param {any} args - `{ workspaceId }`.
@@ -385,25 +390,36 @@ export function createOperations({
         return { available: false, workspaceId, message: 'the Matter resolver is not mounted' };
       }
 
-      // The Workspace path is both the start and the boundary. It is the same
-      // directory the Agent walk stops at, so the two reads of one Workspace
-      // cannot disagree: without the boundary this walked to the filesystem root,
-      // and a Workspace that is an ordinary project directory inside a directory
-      // holding a `matter.yaml` was reported here as that Matter while the Agent —
-      // correctly bounded — reported none.
-      const { facts, problem } = await matterResolver.resolvePath(workspace.path, workspace.path);
+      // The Workspace's own directory is the start, and the whole declared set is
+      // what the search covers. It is the same set the Agent walk uses, so the two
+      // reads of one Workspace cannot disagree: without a boundary this walked to
+      // the filesystem root and reported an enclosing Matter the Agent did not
+      // have, and without the *set* it reported "no Matter" for a Workspace whose
+      // Matter lives in a directory added to it.
+      //
+      // A set that cannot be read propagates rather than narrowing to one
+      // directory: "we could not list your directories" and "there is no Matter"
+      // must not look the same on the page.
+      const declared = getWorkspaceRoots?.(workspaceId);
+      const roots = Array.isArray(declared) && declared.length > 0 ? declared : [workspace.path];
+      const { facts, problem } = await matterResolver.resolvePath(workspace.path, roots);
       const { document } = readDocument();
       const { policy } = resolveWorkspacePolicy(document, workspaceId, now());
 
       return {
         available: true,
         workspaceId,
-        // `discovered` separates "this directory has no Matter" from "the read
+        // `discovered` separates "these directories have no Matter" from "the read
         // failed": both leave `matter` null, and the page must not call the first
         // one an error.
         discovered: facts !== null,
         matter: facts,
         problem,
+        // Which directories were actually searched. The page names them when there
+        // is no Matter: "这个目录下没有 matter.yaml" is false for a Workspace that
+        // declared several directories, and it reads as a statement about a
+        // configuration the user never made.
+        searched: roots,
         match: matchMatter({ matter: { facts, problem }, policy }),
         // Named so the page never has to guess what the stored values were.
         policy: { profile: policy.profile, defaultPerspective: policy.defaultPerspective },

@@ -65,7 +65,7 @@ Workspace:
 | **Perspective** | the position this work is done from — e.g. 原告代理人 / 被告代理人 under Litigation, 管理人 / 债务人 / 投资人 under Bankruptcy |
 | **Skill policy** | which Skills agents in this Workspace may use: 推荐 / 可用 / 禁用 |
 | **Workspace Subagent** | a reusable definition: who does what class of subtask, with which model |
-| **Matter** | the CaseBench case this directory *is* — read from `matter.yaml`, compared with the Profile and Perspective, never written to |
+| **Matter** | the CaseBench case this Workspace *is* — read from `matter.yaml`, compared with the Profile and Perspective, never written to |
 
 A Profile is a body of reviewable Markdown, not a label. A Perspective is a
 position, and the model is told in as many words that it is not a verified fact.
@@ -257,6 +257,35 @@ transport error. Restart DSH and reopen the page.
   another Workspace is untouched, and removing it restores the catalog exactly.
 - It never writes without the revision it read. A concurrent edit produces a
   refusal and an offer to copy your edits, never a silent overwrite.
+- It never picks between two Matters. A Workspace whose declared directories hold
+  two different `matter.yaml` files is reported as an ambiguity, and the fix is to
+  leave one of them declared — not for the plugin to choose by directory order.
+- It never infers a Matter from a directory name, a CaseBench registry entry or a
+  Workspace id. Identity comes from `matter.id` inside the file, and the file has to
+  be in a directory the Workspace actually declares.
+
+### Where the Matter is looked for
+
+A DSH Workspace is **not necessarily one directory** — `dsh-multi-project` can add
+writable directories to it, and the plugin reads that set through the
+`ctx.workspaceDirs` service it publishes. This matters because of how case work is
+actually laid out here: the Workspace is the team drive holding the case files,
+while the CaseBench Matter lives in `My Legal-agents/<案件>/matter.yaml` as an added
+directory.
+
+The search is:
+
+1. the session's own directory, walking up — but never above the topmost declared
+   directory that contains it;
+2. then each other declared directory, as itself.
+
+The first step is CaseBench's rule unchanged. The second is what makes an added
+directory work. A directory is never searched *through*: a Matter above an added
+directory stays unreachable unless you declare that higher directory too. Without
+`dsh-multi-project` the plugin sees one directory and behaves exactly as it did
+before it could read the set. The page names every directory it searched whenever
+there is more than one, so "no matter.yaml" is a statement about the set rather than
+about a directory you never configured.
 
 ## Layout
 
@@ -269,7 +298,7 @@ src/                 host half
   session-perspective.js   the per-session stance, and its storage domain
   profile-runtime.js   the three injected prompt sections
   matter-yaml.js       the matter.yaml subset reader (strict: it refuses, never guesses)
-  matter-resolution.js cwd → Matter Root, with a synchronous lookup for assemblies
+  matter-resolution.js the declared directory set → Matter Root, with a synchronous lookup
   matter-match.js      Matter type/role → Profile/Perspective, and the verdicts
   skill-policy.js      per-Agent Skill shadows
   model-catalog.js     route catalogue and preflight
@@ -281,8 +310,8 @@ client.js            the Settings section (classic script, no bundler)
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition, plus
                        matter-probe.mjs and matter-yaml-golden.py for the Matter reader
-test/                230 tests, and fixtures/ holding the PyYAML golden pair
-docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3 · 0.4
+test/                241 tests, and fixtures/ holding the PyYAML golden pair
+docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3 · 0.4 · 0.5
 ```
 
 ## Requirements
@@ -367,10 +396,13 @@ node scripts/matter-yaml-golden.py       # needs Python + PyYAML; see --help
   why they live in the browser half, and the `deepseek-v41-flash` correction.
 - [`docs/MILESTONE-0.4.md`](docs/MILESTONE-0.4.md) — the 码农 (`coding`) template,
   and why its duties stay an enumerated list.
+- [`docs/MILESTONE-0.5.md`](docs/MILESTONE-0.5.md) — the Matter of a multi-directory
+  Workspace: why every real Workspace reported none, the `ctx.workspaceDirs` seam,
+  and what is verified versus still owed.
 
 ## Release
 
-Current version: **0.4.0** (`package.json` is the single source of truth). What
+Current version: **0.5.0** (`package.json` is the single source of truth). What
 changed in each release, and what was deliberately not done, is in
 [`CHANGELOG.md`](CHANGELOG.md); tagged releases are on
 [GitHub](https://github.com/vansonffff/dsh-workspace-profile/releases).

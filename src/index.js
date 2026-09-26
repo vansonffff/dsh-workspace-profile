@@ -105,25 +105,71 @@ export function apply(ctx, config = {}) {
   // departing one degrades to a named error instead of a stale reference.
   /** @type {CompositionStore|undefined} */ let store;
   /** @type {WorkspaceProfileService|undefined} */ let service;
+  /**
+   * The additional writable directories a Workspace declares, published by
+   * `dsh-multi-project` as the `workspaceDirs` service.
+   *
+   * Optional on purpose: a composition without that plugin has single-directory
+   * Workspaces, which is exactly what this plugin assumed before it could read
+   * the set — so its absence degrades to the previous behavior rather than to a
+   * wrong answer.
+   * @type {{ dirsFor?: (workspaceId: string) => { dirs: string[], missingDirs: string[] }|undefined }|undefined}
+   */
+  let workspaceDirs;
 
   const getStore = () => store;
   const getRegistry = () => ctx.get('workspaceRegistry');
   const getSkills = () => ctx.get('skills');
   const getLlm = () => ctx.get('llm');
   const getSubagents = () => ctx.get('subagents');
+  const getWorkspaceDirs = () => workspaceDirs;
 
   const resolver = new WorkspaceResolver({ getRegistry, logger });
+
+  /**
+   * Every directory one Workspace covers: its own path first, then the ones added
+   * to it.
+   *
+   * One function for both readers of the question — the Agent path and the
+   * Settings read — because they disagreeing is the failure this plugin has
+   * already had once (the Settings card reported an enclosing Matter that no
+   * session had).
+   *
+   * @param {string} workspaceId - the Workspace.
+   * @returns {string[]} the declared directories, the Workspace's own first.
+   */
+  const rootsFor = (workspaceId) => {
+    /** @type {string[]} */
+    const roots = [];
+    const path = resolver.describe(workspaceId)?.path;
+    if (typeof path === 'string' && path !== '') roots.push(path);
+    const dirs = getWorkspaceDirs();
+    if (dirs !== undefined && typeof dirs.dirsFor === 'function') {
+      // A store that cannot be read is *not* narrowed to one directory here:
+      // answering "no Matter" for a Workspace whose Matter is in an added
+      // directory is the failure this seam exists to remove. The throw travels to
+      // whichever reader asked — the page shows it as a load failure, and the
+      // Agent path bounds itself to the cwd (see `MatterResolver.resolveAgent`).
+      const answer = dirs.dirsFor(workspaceId);
+      for (const dir of answer?.dirs ?? []) {
+        if (typeof dir === 'string' && dir !== '') roots.push(dir);
+      }
+    }
+    return roots;
+  };
+
   // Resolves the CaseBench Matter a session sits inside. Its synchronous half is
   // what the Settings read uses; nothing in the prompt sections depends on it, so a
   // composition that never resolves one degrades to "no Matter" rather than failing.
   const matterResolver = new MatterResolver({
     logger,
-    // The Workspace directory bounds the upward walk, so a Matter above the
-    // Workspace is never adopted. `ensureReady` resolves the Workspace first,
-    // so this is a lookup by the time a Matter is asked for.
-    workspacePathFor: (agent) => {
+    // The Workspace's directories bound the upward walk, so a Matter above the
+    // Workspace is never adopted — and they are searched, so a Matter in a
+    // directory added to the Workspace is found. `ensureReady` resolves the
+    // Workspace first, so this is a lookup by the time a Matter is asked for.
+    workspaceRootsFor: (agent) => {
       const workspaceId = resolver.workspaceIdForAgent(agent);
-      return workspaceId === undefined ? undefined : resolver.describe(workspaceId)?.path;
+      return workspaceId === undefined ? [] : rootsFor(workspaceId);
     },
   });
   const catalog = new ModelCatalog({ getLlm, logger });
@@ -218,6 +264,9 @@ export function apply(ctx, config = {}) {
     getStore,
     getResolver: () => resolver,
     getMatterResolver: () => matterResolver,
+    // The same declared set the Agent path uses, so the Settings card and the
+    // session cannot disagree about which directories this Workspace covers.
+    getWorkspaceRoots: rootsFor,
     getCatalog: () => catalog,
     getSkills,
     getAgents: () => ctx.get('agents'),
@@ -256,8 +305,26 @@ export function apply(ctx, config = {}) {
       subagents: getSubagents() !== undefined,
       spawnProvider: getSubagents()?.getProvider('spawn') !== undefined,
       remote: service !== undefined,
+      // Reported even though nothing renders it today: "the Workspace covers more
+      // than one directory and this composition cannot see that" is the difference
+      // between a Matter that is absent and a Matter that is unlooked-for.
+      workspaceDirs: getWorkspaceDirs() !== undefined,
     };
   }
+
+  // ── the Workspace's additional directories ────────────────────────────────
+  //
+  // `dsh-multi-project` owns the record of directories added to a Workspace and
+  // publishes it read-only. Taken as a seam like every other: a composition
+  // without that plugin keeps single-directory Workspaces and this callback
+  // simply never runs.
+  ctx.inject(['workspaceDirs'], (dirsCtx) => {
+    workspaceDirs = dirsCtx.workspaceDirs;
+    dirsCtx.effect(() => () => {
+      workspaceDirs = undefined;
+    });
+    logger?.info?.('workspace-profile: reading the Workspace directory set from ctx.workspaceDirs');
+  });
 
   // ── Profile texts ─────────────────────────────────────────────────────────
   //

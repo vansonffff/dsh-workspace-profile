@@ -52,7 +52,7 @@ renders the gaps rather than a control that fails.
 | `src/settings.js` | the permissive schema, the store, revision fencing | `policy`, `schemastery` |
 | `src/workspace-resolution.js` | cwd → `WorkspaceId`, sync index + async canon | nothing |
 | `src/matter-yaml.js` | the `matter.yaml` subset reader; refuses everything else | nothing |
-| `src/matter-resolution.js` | cwd → Matter Root, sync lookup + async discovery | `matter-yaml` |
+| `src/matter-resolution.js` | the declared directory set → Matter Root, sync lookup + async discovery | `matter-yaml` |
 | `src/matter-match.js` | CaseBench type/role → Profile/Perspective, and the verdicts | `policy`, `matter-contract` |
 | `src/matter-contract.js` | the CaseBench 3.2.8 vocabulary and its validator | nothing |
 | `src/profile-runtime.js` | Profile/Perspective text loading and the three sections | `policy`, `subagent-registry` (sanitizer) |
@@ -118,18 +118,30 @@ workspace_subagent | /agent
 Settings → 工作区 → the Matter card
         └─→ remote.matter({ workspaceId })
               → operations.matter
-              → getResolver().describe(id).path      ← the Workspace directory
-              → MatterResolver.resolvePath(path)
-                    → findMatter   walk up to the nearest matter.yaml
+              → getWorkspaceRoots(id)                ← every directory the Workspace covers:
+                  registry path                       its own path first, then the ones
+                  + ctx.workspaceDirs.dirsFor(id)     dsh-multi-project recorded
+              → MatterResolver.resolvePath(path, roots)
+                    → findMatter   the session's chain first, then each declared
+                                   directory as itself (searchOrigins)
                     → parseMatterYaml   the strict subset reader
               → matchMatter({ matter, policy })      ← the tables in matter-match.js
-              → { discovered, matter, problem, match }
+              → { discovered, matter, problem, searched, match }
 ```
 
 The same resolver is primed at every step boundary (`agent/created` and
 `agent/pre-step`), so a delegation reads the Matter synchronously and never blocks
 on the filesystem. **Nothing in this path writes**: the page reports a mismatch, it
 does not re-point the Workspace. See `docs/MILESTONE-0.2.md`.
+
+A Workspace is not necessarily one directory. `dsh-multi-project` publishes the
+directories added to it as `ctx.workspaceDirs`; the search covers that whole set,
+because the Matter of a real Workspace frequently lives in an added directory
+(`My Legal-agents/<案件>/matter.yaml`) while the Workspace itself is the team drive
+holding the case files. The service is optional: without that plugin the set is the
+registry path alone, which is the behaviour this plugin had before it could read
+one. When two declared directories hold two different Matters the answer is a
+reported ambiguity, never a choice. See `docs/MILESTONE-0.5.md`.
 
 ### Reading the injected text back
 

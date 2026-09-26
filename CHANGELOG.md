@@ -8,6 +8,39 @@ this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versions before 0.2.0 were developed in a private workspace and are not itemised
 here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
 
+## [0.5.0] — 2026-09-26
+
+### Fixed
+
+- **A Matter in a directory added to the Workspace is now found.** The plugin
+  searched only the Workspace's own registry path, so a Workspace whose case files
+  live in a team drive while its CaseBench Matter lives in
+  `My Legal-agents/<案件>/` — an added directory — reported "这个目录下没有
+  matter.yaml" for every such Workspace. The search now covers the whole declared
+  set: the session's own chain first (CaseBench's rule, unchanged), then each
+  declared directory as itself.
+
+  A directory is never searched *through*: a Matter above an added directory stays
+  unreachable unless that higher directory is declared too. If two declared
+  directories hold two different `matter.yaml` files, the answer is a reported
+  ambiguity rather than a choice made by directory order.
+
+### Added
+
+- **`ctx.workspaceDirs`** (published by `dsh-multi-project`) is consumed as an
+  optional seam. Without that plugin the declared set is the registry path alone,
+  which is the previous behaviour, so this is not a new hard dependency.
+- The Matter card shows **案件目录**, the directory the Matter was read from, and
+  when there is no Matter and the Workspace declares more than one directory, it
+  names every directory that was searched instead of talking about "这个目录".
+
+### Changed
+
+- `findMatter`/`MatterResolver` take the Workspace's **directory set** rather than a
+  single boundary path. `findMatter(start, { workspaceRoot })` becomes
+  `findMatter(start, { roots })`; `resolvePath(path, workspaceRoot)` becomes
+  `resolvePath(path, roots)`. Callers that passed one path pass `[path]`.
+
 ## [0.4.0] — 2026-09-25
 
 ### Added

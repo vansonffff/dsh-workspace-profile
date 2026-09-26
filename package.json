@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-profile",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Workspace Composition for DeepSeek Harness — per-Workspace Profile, default Perspective, Skill policy and reusable Workspace Subagent definitions, with a Settings surface and a unified dispatch entry point.",
   "type": "module",
   "license": "MIT",

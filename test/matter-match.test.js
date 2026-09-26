@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { findMatter, isMissing } from '../src/matter-resolution.js';
+import { findMatter, isMissing, normaliseRoots, searchOrigins } from '../src/matter-resolution.js';
 import {
   ROLE_TO_PERSPECTIVE,
   matchMatter,
@@ -354,24 +354,29 @@ test('a Matter above the Workspace root is not adopted', async (t) => {
   const unbounded = await findMatter(cwd);
   assert.equal(unbounded.facts?.name, '外层的案件', 'without a boundary the walk does reach it');
 
-  const bounded = await findMatter(cwd, { workspaceRoot: join(root, 'workspace-B') });
+  const bounded = await findMatter(cwd, { roots: [join(root, 'workspace-B')] });
   assert.equal(bounded.facts, null, 'with the boundary it must not');
   assert.equal(bounded.problem, null, 'and that is an ordinary "no Matter", not a failure');
 });
 
 test('a Matter at or inside the Workspace root is still found', async (t) => {
   const root = await workspace(t);
+  // A decoy above both Workspaces below, so a run that silently lost its boundary
+  // would answer with *this* Matter rather than passing by accident.
+  await writeMatter(root, { matter: { name: '外层干扰案' } });
+
   // At the root.
-  await writeMatter(root, { matter: { name: '根本案' } });
-  await mkdir(join(root, 'sub'), { recursive: true });
-  const atRoot = await findMatter(join(root, 'sub'), { workspaceRoot: root });
+  const at = join(root, 'at-root');
+  await mkdir(join(at, 'sub'), { recursive: true });
+  await writeMatter(at, { matter: { name: '根本案' } });
+  const atRoot = await findMatter(join(at, 'sub'), { roots: [at] });
   assert.equal(atRoot.facts?.name, '根本案');
 
   // Below the root, above the cwd.
-  const nested = await workspace(t);
+  const nested = join(root, 'nested');
   await mkdir(join(nested, 'case', 'deep', 'deeper'), { recursive: true });
   await writeMatter(join(nested, 'case'), { matter: { name: '嵌套案' } });
-  const found = await findMatter(join(nested, 'case', 'deep', 'deeper'), { workspaceRoot: nested });
+  const found = await findMatter(join(nested, 'case', 'deep', 'deeper'), { roots: [nested] });
   assert.equal(found.facts?.name, '嵌套案');
 });
 
@@ -379,7 +384,7 @@ test('a cwd outside its own Workspace resolves to no Matter, not to a guess', as
   const root = await workspace(t);
   await mkdir(join(root, 'elsewhere'), { recursive: true });
   await writeMatter(root);
-  const result = await findMatter(join(root, 'elsewhere'), { workspaceRoot: join(root, 'other-root') });
+  const result = await findMatter(join(root, 'elsewhere'), { roots: [join(root, 'other-root')] });
   assert.equal(result.facts, null);
   assert.equal(result.problem, null);
 });
@@ -389,8 +394,129 @@ test('a sibling with a shared prefix is not inside the Workspace', async (t) => 
   await mkdir(join(root, 'matter-old'), { recursive: true });
   await writeMatter(root, { matter: { name: '外层' } });
   // `/…/matter-old` starts with `/…/matter` as a string but is not a child of it.
-  const result = await findMatter(join(root, 'matter-old'), { workspaceRoot: join(root, 'matter') });
+  const result = await findMatter(join(root, 'matter-old'), { roots: [join(root, 'matter')] });
   assert.equal(result.facts, null);
+});
+
+// ── the Workspace's declared set ─────────────────────────────────────────────
+//
+// A Workspace is not necessarily one directory. DSH's multi-root model lets it
+// declare additional writable directories, and a CaseBench Matter may live in one
+// of them — the shape this plugin reported as "no matter.yaml" for every real
+// Workspace on the machine it was written on (`My Legal-agents/<案件>/matter.yaml`
+// beside a team drive holding the case files).
+//
+// The rules being pinned here: the set is searched; the session's own chain wins;
+// a directory is not searched *through*; and a set naming two cases is reported
+// rather than resolved by directory order.
+
+test('a Matter in a directory added to the Workspace is found', async (t) => {
+  const root = await workspace(t);
+  const caseDir = join(root, 'team-drive', '案件_1');
+  const productDir = join(root, 'My Legal-agents', '案件');
+  await mkdir(caseDir, { recursive: true });
+  await mkdir(productDir, { recursive: true });
+  await writeMatter(productDir, { matter: { name: '真实案件' } });
+
+  // The bug: the case directory holds the work and the product directory holds the
+  // Matter, so a search that stops at the Workspace's own directory answers "none".
+  const before = await findMatter(caseDir, { roots: [caseDir] });
+  assert.equal(before.facts, null, 'the primary directory alone has no Matter — that was the report');
+
+  const after = await findMatter(caseDir, { roots: [caseDir, productDir] });
+  assert.equal(after.facts?.name, '真实案件');
+  assert.equal(after.problem, null);
+  assert.equal(after.facts.root, productDir, 'the facts name where it was actually read from');
+});
+
+test("the session's own chain wins over an added directory", async (t) => {
+  const root = await workspace(t);
+  const caseDir = join(root, 'case');
+  const added = join(root, 'added');
+  await mkdir(caseDir, { recursive: true });
+  await mkdir(added, { recursive: true });
+  // Both hold a Matter. The nearest-ancestor rule decides the session's own chain,
+  // so an added directory never overrides the case the session is standing in —
+  // and this is the ambiguity the *next* test shows when the chain is silent.
+  await writeMatter(caseDir, { matter: { name: '本目录案件' } });
+  await writeMatter(added, { matter: { id: 'ffffffff-0000-1111-2222-333333333333', name: '附加目录案件' } });
+
+  const result = await findMatter(caseDir, { roots: [caseDir, added] });
+  assert.equal(result.facts?.name, '本目录案件');
+  assert.equal(result.problem, null);
+});
+
+test('two declared directories holding two Matters are reported, not resolved', async (t) => {
+  const root = await workspace(t);
+  const caseDir = join(root, 'case');
+  const addedA = join(root, 'added-a');
+  const addedB = join(root, 'added-b');
+  for (const dir of [caseDir, addedA, addedB]) await mkdir(dir, { recursive: true });
+  await writeMatter(addedA, { matter: { name: '案件甲' } });
+  await writeMatter(addedB, { matter: { id: 'ffffffff-0000-1111-2222-333333333333', name: '案件乙' } });
+
+  const result = await findMatter(caseDir, { roots: [caseDir, addedA, addedB] });
+  assert.equal(result.facts, null, 'picking one would be a statement nobody made');
+  assert.match(result.problem, /多个目录各有一个 matter\.yaml/);
+  assert.match(result.problem, /案件甲|added-a/);
+  assert.match(result.problem, /added-b/);
+});
+
+test('an added directory is not searched through to the directory above it', async (t) => {
+  const root = await workspace(t);
+  const caseDir = join(root, 'case');
+  const productRoot = join(root, 'My Legal-agents');
+  const caseSub = join(productRoot, '案件', '子案件');
+  await mkdir(caseDir, { recursive: true });
+  await mkdir(caseSub, { recursive: true });
+  await writeMatter(join(productRoot, '案件'), { matter: { name: '案件' } });
+
+  // The added directory is a *subdirectory* of the Matter Root. Declaring only the
+  // subdirectory must not reach the Matter above it: the walk stops at the topmost
+  // declared directory, exactly as it stops at the Workspace root.
+  const narrow = await findMatter(caseDir, { roots: [caseDir, caseSub] });
+  assert.equal(narrow.facts, null, 'the Matter above an added directory is not adopted');
+  assert.equal(narrow.problem, null);
+
+  // Declaring the Matter Root as well makes it reachable — the user stated it.
+  const wide = await findMatter(caseDir, { roots: [caseDir, caseSub, join(productRoot, '案件')] });
+  assert.equal(wide.facts?.name, '案件');
+});
+
+test('a session whose cwd sits in an added directory is searched from there', async (t) => {
+  const root = await workspace(t);
+  const caseDir = join(root, 'case');
+  const added = join(root, 'added');
+  await mkdir(join(added, 'sub'), { recursive: true });
+  await mkdir(caseDir, { recursive: true });
+  await writeMatter(added, { matter: { name: '附加目录案件' } });
+
+  const result = await findMatter(join(added, 'sub'), { roots: [caseDir, added] });
+  assert.equal(result.facts?.name, '附加目录案件');
+});
+
+test('the declared set is resolved and de-duplicated, and unusable entries are dropped', () => {
+  assert.deepEqual(normaliseRoots(['/a', '/a', '/b/']), ['/a', '/b']);
+  assert.deepEqual(normaliseRoots('/a'), ['/a'], 'one directory does not need wrapping');
+  assert.deepEqual(normaliseRoots(['', null, 7, '/a']), ['/a']);
+  assert.deepEqual(normaliseRoots(undefined), []);
+  assert.deepEqual(normaliseRoots([]), []);
+});
+
+test('searchOrigins: the walk stops at the topmost declared directory containing the start', () => {
+  // One directory: the rule CaseBench states, unchanged.
+  assert.deepEqual(searchOrigins('/w/sub', ['/w']), [{ start: '/w/sub', boundary: '/w' }]);
+  // A start that contains another start is dropped: the deeper walk covers it.
+  assert.deepEqual(searchOrigins('/w', ['/w', '/w/added']), [{ start: '/w/added', boundary: '/w' }]);
+  // Unrelated directories are searched as themselves.
+  assert.deepEqual(searchOrigins('/team/case', ['/team/case', '/product/case']), [
+    { start: '/team/case', boundary: '/team/case' },
+    { start: '/product/case', boundary: '/product/case' },
+  ]);
+  // A cwd outside every declared directory is not searched at all.
+  assert.deepEqual(searchOrigins('/elsewhere', ['/w']), [{ start: '/w', boundary: '/w' }]);
+  // No declared set keeps the single unbounded walk.
+  assert.deepEqual(searchOrigins('/w/sub', []), [{ start: '/w/sub', boundary: undefined }]);
 });
 
 // ── the Contract, not just the syntax ────────────────────────────────────────

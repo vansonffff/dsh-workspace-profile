@@ -1698,7 +1698,7 @@ test('the Matter card reports what the directory declares, and whether we agree'
       available: true,
       discovered: true,
       problem: null,
-      matter: { id: '11111111-2222-3333-4444-555555555555', name: '示例系列案件', type: 'litigation', role: 'plaintiff', stage: 'unknown', modules: ['litigation.series'] },
+      matter: { id: '11111111-2222-3333-4444-555555555555', name: '示例系列案件', type: 'litigation', role: 'plaintiff', stage: 'unknown', modules: ['litigation.series'], root: '/cases/示例系列案件' },
       match: {
         profile: { expected: 'litigation', actual: 'litigation', verdict: 'match' },
         perspective: { expected: 'plaintiff', workspaceDefault: 'plaintiff', sessionOverride: null, effective: 'plaintiff', verdict: 'match' },
@@ -1712,6 +1712,11 @@ test('the Matter card reports what the directory declares, and whether we agree'
   assert.ok(text.includes('matterRole') && text.includes('matterStage') && text.includes('matterModules'), 'the classification fields render');
   assert.ok(text.includes('11111111-2222-3333-4444-555555555555'), 'the Matter id is shown verbatim');
   assert.ok(text.includes('litigation.series'), 'modules are shown');
+  // Which directory it came from. With a declared set this is the only place the
+  // page says where the Matter lives, and it is the difference between "the
+  // Workspace is the case" and "one of the Workspace's directories is".
+  assert.ok(text.includes('matterRoot'), 'the directory it was read from has its own row');
+  assert.ok(text.includes('/cases/示例系列案件'), 'and the path is shown verbatim');
   // The two verdicts, each its own row.
   assert.ok(text.includes('matterProfileMatch') && text.includes('matterPerspectiveMatch'), 'both comparisons are shown');
   assert.ok(text.includes('matterMatch'), 'an agreeing pair reads as a match');
@@ -1724,6 +1729,39 @@ test('a workspace directory with no matter.yaml is not presented as an error', a
   const text = strings(tree).join('\u0000');
   assert.ok(text.includes('matterNone'), 'the ordinary case is stated plainly');
   assert.ok(!text.includes('matterUnreadable'), 'absence is not an unreadable file');
+});
+
+test('a workspace with several directories names the ones that were searched', async () => {
+  // The report that produced this card: a Workspace declaring a team drive and a
+  // product directory told the user "这个目录下没有 matter.yaml" about a directory
+  // it had not looked in. The page has to say what it looked at.
+  const { tree } = await renderSection({
+    matter: {
+      available: true,
+      discovered: false,
+      matter: null,
+      problem: null,
+      match: null,
+      searched: ['/team/案件_1', '/product/案件'],
+    },
+  });
+  const rendered = strings(tree);
+  // `includes` on the *list*, not on a joined blob: `matterNone` is a prefix of
+  // `matterNoneMulti`, so a substring check could not tell the two apart.
+  assert.ok(rendered.includes('matterNoneMulti'), 'the several-directory wording is used');
+  assert.ok(!rendered.includes('matterNone'), 'and not the single-directory sentence');
+  assert.ok(rendered.includes('/team/案件_1'), 'every directory that was searched is listed');
+  assert.ok(rendered.includes('/product/案件'), 'including the one added to the workspace');
+});
+
+test('one declared directory keeps the plain sentence, with no list to read', async () => {
+  const { tree } = await renderSection({
+    matter: { available: true, discovered: false, matter: null, problem: null, match: null, searched: ['/only/one'] },
+  });
+  const rendered = strings(tree);
+  assert.ok(rendered.includes('matterNone'), 'one directory is the ordinary case');
+  assert.ok(!rendered.includes('matterNoneMulti'), 'no list is printed when there is nothing to disambiguate');
+  assert.ok(!rendered.includes('/only/one'), 'and the one directory is not repeated back');
 });
 
 test('an unreadable matter.yaml says why, rather than claiming there is none', async () => {

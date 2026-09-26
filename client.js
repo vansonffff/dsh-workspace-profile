@@ -653,8 +653,10 @@ window.__ModuleLoader__.load({
         matterTitle: '案件（Matter）',
         matterHint: '以上由工作区目录中的 matter.yaml 读出，本页只读。插件不会因为你改了 Profile 就回写案件文件，也不会因为案件文件变了就自动改你的配置。',
         matterNone: '这个目录下没有 matter.yaml —— 普通项目目录就是这样，不是错误。',
+        matterNoneMulti: '工作区声明的这些目录下都没有 matter.yaml：',
         matterUnreadable: '发现了 matter.yaml，但无法读取：',
         matterName: '名称',
+        matterRoot: '案件目录',
         matterId: 'Matter ID',
         matterType: '类型',
         matterRole: '正式角色',
@@ -791,8 +793,10 @@ window.__ModuleLoader__.load({
         matterTitle: 'Matter',
         matterHint: 'Read from matter.yaml in this workspace directory; this page is read-only. The plugin never rewrites the matter because you changed a Profile, and never changes your configuration because the file did.',
         matterNone: 'No matter.yaml in this directory — that is what an ordinary project directory looks like, not an error.',
+        matterNoneMulti: 'No matter.yaml in any of the directories this workspace declares:',
         matterUnreadable: 'A matter.yaml was found but could not be read: ',
         matterName: 'Name',
+        matterRoot: 'Matter directory',
         matterId: 'Matter ID',
         matterType: 'Type',
         matterRole: 'Formal role',
@@ -1354,9 +1358,26 @@ window.__ModuleLoader__.load({
           // put a false statement on the page: "there is no matter.yaml here" is
           // wrong when one exists and could not be read. The problem, when present,
           // is the whole answer.
-          return jsx(Card, { title, children: value.problem
-            ? jsx('div', { style: s.notice(WARN), children: t('matterUnreadable') + value.problem })
-            : jsx('div', { style: s.hint, children: t('matterNone') }) });
+          if (value.problem) {
+            return jsx(Card, { title, children: jsx('div', { style: s.notice(WARN), children: t('matterUnreadable') + value.problem }) });
+          }
+          // A Workspace may declare several directories, so "这个目录下没有" is a
+          // statement about one directory that the user never made. Name the set
+          // that was actually searched — the page's job is to say what was looked
+          // at, not to imply the answer was obvious.
+          //
+          // One directory keeps the plain sentence: there is nothing to
+          // disambiguate, and a list of one reads as a machine talking.
+          const searched = Array.isArray(value.searched) ? value.searched : [];
+          if (searched.length <= 1) {
+            return jsx(Card, { title, children: jsx('div', { style: s.hint, children: t('matterNone') }) });
+          }
+          return jsx(Card, { title, children: jsxs('div', { style: s.hint, children: [
+            jsx('div', { children: t('matterNoneMulti') }),
+            // One element per directory, so each is a line of its own and a long
+            // path wraps inside the card instead of running out of it.
+            ...searched.map((directory) => jsx('div', { key: directory, style: s.fieldValue, children: directory })),
+          ] }) });
         }
         const facts = value.matter;
         const verdict = (which) => {
@@ -1373,6 +1394,10 @@ window.__ModuleLoader__.load({
             ? jsx('div', { style: s.notice(WARN), children: t('matterUnreadable') + value.problem })
             : null,
           jsx(Field, { label: t('matterName'), children: jsx(Text, { style: s.fieldValue, children: facts.name }) }),
+          // Which directory it was read from. With one directory that is the
+          // Workspace itself and says nothing new; with several it answers "where
+          // did this come from", which otherwise lives only in the log.
+          jsx(Field, { label: t('matterRoot'), children: jsx(Text, { style: s.fieldValue, children: facts.root }) }),
           jsx(Field, { label: t('matterId'), children: jsx(Text, { style: s.fieldValue, children: facts.id }) }),
           jsx(Field, { label: t('matterType'), children: jsx(Text, { style: s.fieldValue, children: facts.type }) }),
           jsx(Field, { label: t('matterRole'), children: jsx(Text, { style: s.fieldValue, children: facts.role }) }),
