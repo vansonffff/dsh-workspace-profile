@@ -51,6 +51,7 @@ renders the gaps rather than a control that fails.
 | `src/policy.js` | the data model: defaults, validation, migration, resolution, the recommendation table | `errors` |
 | `src/settings.js` | the permissive schema, the store, revision fencing | `policy`, `schemastery` |
 | `src/workspace-resolution.js` | cwd → `WorkspaceId`, sync index + async canon | nothing |
+| `src/workspace-roots.js` | the declared directory set: registry path, then `ctx.workspaceDirs` | nothing |
 | `src/matter-yaml.js` | the `matter.yaml` subset reader; refuses everything else | nothing |
 | `src/matter-resolution.js` | the declared directory set → Matter Root, sync lookup + async discovery | `matter-yaml` |
 | `src/matter-match.js` | CaseBench type/role → Profile/Perspective, and the verdicts | `policy`, `matter-contract` |
@@ -118,9 +119,9 @@ workspace_subagent | /agent
 Settings → 工作区 → the Matter card
         └─→ remote.matter({ workspaceId })
               → operations.matter
-              → getWorkspaceRoots(id)                ← every directory the Workspace covers:
-                  registry path                       its own path first, then the ones
-                  + ctx.workspaceDirs.dirsFor(id)     dsh-multi-project recorded
+              → getWorkspaceRoots(id)
+              → composeWorkspaceRoots({ path, extra })  ← its own path first, then the
+                                                          ones dsh-multi-project recorded
               → MatterResolver.resolvePath(path, roots)
                     → findMatter   the session's chain first, then each declared
                                    directory as itself (searchOrigins)

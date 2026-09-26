@@ -47,6 +47,7 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths';
 
 import { CompositionStore, SETTINGS_NS } from './settings.js';
 import { WorkspaceResolver } from './workspace-resolution.js';
+import { composeWorkspaceRoots } from './workspace-roots.js';
 import { MatterResolver } from './matter-resolution.js';
 import { ModelCatalog } from './model-catalog.js';
 import { ProfileRuntime, loadProfileTexts } from './profile-runtime.js';
@@ -133,29 +134,23 @@ export function apply(ctx, config = {}) {
    * One function for both readers of the question — the Agent path and the
    * Settings read — because they disagreeing is the failure this plugin has
    * already had once (the Settings card reported an enclosing Matter that no
-   * session had).
+   * session had). The composition itself is `composeWorkspaceRoots`, so the rule
+   * is a tested function rather than six lines inside a composition root.
    *
    * @param {string} workspaceId - the Workspace.
    * @returns {string[]} the declared directories, the Workspace's own first.
    */
   const rootsFor = (workspaceId) => {
-    /** @type {string[]} */
-    const roots = [];
-    const path = resolver.describe(workspaceId)?.path;
-    if (typeof path === 'string' && path !== '') roots.push(path);
     const dirs = getWorkspaceDirs();
-    if (dirs !== undefined && typeof dirs.dirsFor === 'function') {
-      // A store that cannot be read is *not* narrowed to one directory here:
-      // answering "no Matter" for a Workspace whose Matter is in an added
-      // directory is the failure this seam exists to remove. The throw travels to
-      // whichever reader asked — the page shows it as a load failure, and the
-      // Agent path bounds itself to the cwd (see `MatterResolver.resolveAgent`).
-      const answer = dirs.dirsFor(workspaceId);
-      for (const dir of answer?.dirs ?? []) {
-        if (typeof dir === 'string' && dir !== '') roots.push(dir);
-      }
-    }
-    return roots;
+    // A store that cannot be read is *not* narrowed to one directory here:
+    // answering "no Matter" for a Workspace whose Matter is in an added directory
+    // is the failure this seam exists to remove. The throw travels to whichever
+    // reader asked — the page shows it as a load failure, and the Agent path
+    // bounds itself to the cwd (see `MatterResolver.resolveAgent`).
+    const extra = dirs !== undefined && typeof dirs.dirsFor === 'function'
+      ? dirs.dirsFor(workspaceId)
+      : undefined;
+    return composeWorkspaceRoots({ path: resolver.describe(workspaceId)?.path, extra: extra?.dirs });
   };
 
   // Resolves the CaseBench Matter a session sits inside. Its synchronous half is

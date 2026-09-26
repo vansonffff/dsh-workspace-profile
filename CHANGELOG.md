@@ -33,6 +33,10 @@ here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
 - The Matter card shows **案件目录**, the directory the Matter was read from, and
   when there is no Matter and the Workspace declares more than one directory, it
   names every directory that was searched instead of talking about "这个目录".
+- `src/workspace-roots.js` — the composition of the declared set (the registry path,
+  then the added directories) is a pure function with its own tests. It is the rule
+  that decides whether a case is recognised at all, and until now it lived inside
+  `apply`, where no test could see it.
 
 ### Changed
 

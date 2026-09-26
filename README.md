@@ -295,6 +295,7 @@ src/                 host half
   policy.js            the data model: pure functions in, values out
   settings.js          the namespace, the store, revision fencing
   workspace-resolution.js  cwd → WorkspaceId
+  workspace-roots.js   the declared directory set: the registry path, then ctx.workspaceDirs
   session-perspective.js   the per-session stance, and its storage domain
   profile-runtime.js   the three injected prompt sections
   matter-yaml.js       the matter.yaml subset reader (strict: it refuses, never guesses)
@@ -310,7 +311,7 @@ client.js            the Settings section (classic script, no bundler)
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition, plus
                        matter-probe.mjs and matter-yaml-golden.py for the Matter reader
-test/                241 tests, and fixtures/ holding the PyYAML golden pair
+test/                247 tests, and fixtures/ holding the PyYAML golden pair
 docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3 · 0.4 · 0.5
 ```
 

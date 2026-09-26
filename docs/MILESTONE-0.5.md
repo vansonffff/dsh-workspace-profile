@@ -134,14 +134,30 @@ was searched. `searched` is part of the Remote answer for that reason: "这个�
 ## Verification
 
 ```
-dsh-workspace-profile   node --test "test/*.test.js"     241 / 241   (was 230)
-dsh-multi-project       vitest run                       9 failed | 242 passed  (baseline: 9 failed | 233 passed)
+dsh-workspace-profile   node --test "test/*.test.js"     247 / 247   (was 230)
+dsh-multi-project       vitest run                       9 failed | 244 passed  (baseline: 9 failed | 233 passed)
 ```
 
 The nine failures in `dsh-multi-project` are the pre-existing `/var` vs
 `/private/var` canonicalisation failures in `context-injection`, `dirs-api` and
 `search-upload` — the same nine, in the same three files, before and after. The
 package's own record calls that the environment baseline.
+
+**The composition is its own tested function.** The six lines that decide which
+directories are searched — the Workspace's own path, then `ctx.workspaceDirs` — began
+inside `apply`, where no test could see them: the operation tests supply their own
+`getWorkspaceRoots`, so dropping an added directory in the real composition would
+have failed nothing. They are now `src/workspace-roots.js`, unit-tested for order,
+de-duplication, unusable entries and a surprising `extra` shape, and the same
+extraction is what the card's `searched` list and the Agent path both go through.
+The negative control for it: emptying the `extra` loop turns the new cases red.
+
+**The shipped artifact was checked, not just the sources.** `dsh-multi-project` is
+loaded by the desktop app as `lib/index.js`, so the built file was mounted in a real
+Cordis context with a consumer that uses the published contract; the provider was the
+built `apply`, not the TypeScript entry. It answered with the canonical added
+directory. (The sources are covered by the vitest suite; this closes the gap between
+"the source provides it" and "what the app loads provides it".)
 
 **A real Cordis context, two plugins** (`tests/workspace-dirs.spec.ts`): a provider
 that calls `provideWorkspaceDirs`, and a consumer written the way this plugin writes
@@ -165,6 +181,7 @@ was restored and re-run green:
 | vanished dirs dropped instead of reported | the split and anti-drift cases |
 | `apply` no longer provides the service (multi-project) | the plugin-shape case |
 | the service renamed on the provider side | the real-context consumer case |
+| `composeWorkspaceRoots` drops the added dirs | the composition cases |
 
 One real leak was caught by the repository's own guard during this round: the first
 draft of the operation test used a real matter name, and `no-client-data.test.js`
