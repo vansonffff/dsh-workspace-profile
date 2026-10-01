@@ -3148,7 +3148,10 @@ window.__ModuleLoader__.load({
                         ? t('codexAvailable')
                         : t('codexMissing') + (codex.problem === null ? '' : '（' + t('codexProblem') + codex.problem + '）'),
                     }),
-                    jsx('div', { children: t('codexMissingHint') }),
+                    // The "no backend registered" explainer belongs to the missing
+                    // state only: under a green "Codex 后端可用" its first sentence
+                    // is a lie, and the two lines read as a contradiction.
+                    ...(codexReady && codex.problem === null ? [] : [jsx('div', { children: t('codexMissingHint') })]),
                   ],
                 })
               : jsx('div', { className: C.fieldStackHint, children: t('backendNoteSpawn') }),

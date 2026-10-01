@@ -2334,6 +2334,10 @@ test('the dialog shows the Codex availability the Host reported', () => {
   assert.match(source, /const codexReady = codex && codex\.available === true;/);
   assert.match(source, /children: codexReady && codex\.problem === null\s*\n\s*\? t\('codexAvailable'\)/,
     'an available backend and an undetectable one are different answers');
+  // The "no backend registered" explainer contradicts a green verdict, so it is
+  // rendered only in the missing state, never next to `codexAvailable`.
+  assert.match(source, /\.\.\.\(codexReady && codex\.problem === null \? \[\] : \[jsx\('div', \{ children: t\('codexMissingHint'\) \}\)\]\)/,
+    'the missing-hint rides the same verdict as the missing line');
 });
 
 test('the section passes the Codex capability into the dialog', () => {
