@@ -183,6 +183,79 @@ export const PROFILE_RECOMMENDED_SKILLS = Object.freeze({
 export const SUBAGENT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /**
+ * The execution backends a Subagent definition may name.
+ *
+ * Two, deliberately, and not one more: `spawn` is the in-process DSH child this
+ * plugin has always created, `codex` is the official Codex backend registered in
+ * the same `ctx.subagents` provider table. `fork`, `acp` and `sdk` exist in the
+ * harness but are not offered here — a Workspace Subagent is a durable
+ * *definition*, and offering a transport the deployment may not mount would
+ * produce definitions that fail at dispatch instead of at save.
+ *
+ * The vocabulary is closed: an unknown backend is refused at write time rather
+ * than falling back to `spawn`, because a silent fallback would run the user's
+ * work in a place they did not choose.
+ */
+export const SUBAGENT_BACKENDS = Object.freeze(['spawn', 'codex']);
+
+/**
+ * The backend a definition runs on.
+ *
+ * **The compatibility red line.** Every Subagent stored by 0.5.0 and earlier has
+ * no `backend` field at all. `undefined` therefore means `spawn`, which is what
+ * those definitions actually did — so they keep their exact behaviour with no
+ * migration, no rewrite and no touching of the user's stored document. Only a
+ * definition created or edited from now on carries an explicit value.
+ *
+ * An unrecognised value resolves to `spawn` as well. That is not a licence to
+ * store one (see {@link validateSubagentDefinition}); it is the read-side answer
+ * for a document written by a newer build, where guessing the *newer* transport
+ * would be worse than running the one this build understands.
+ *
+ * @param {any} definition - a stored definition, or a route-shaped object.
+ * @returns {'spawn'|'codex'} the backend it runs on.
+ */
+export function subagentBackend(definition) {
+  const declared = definition?.backend;
+  return declared === 'codex' ? 'codex' : 'spawn';
+}
+
+/**
+ * Whether a value is a backend this build will store.
+ *
+ * `undefined` is accepted: it is what every pre-0.6.0 definition carries, and a
+ * write that does not mention a backend must not be refused for saying nothing.
+ *
+ * @param {unknown} backend - the candidate.
+ * @returns {boolean} whether it may be stored.
+ */
+export function isValidSubagentBackend(backend) {
+  return backend === undefined || SUBAGENT_BACKENDS.includes(/** @type {string} */ (backend));
+}
+
+/**
+ * The human-facing label of a Subagent's execution route.
+ *
+ * One function, because three readers ask the same question and must not answer
+ * it differently: the model-visible expert directory, the `@` mention catalog,
+ * and the Settings card. A `codex` definition has **no** DSH LLM route at all —
+ * its model belongs to Codex — so printing the empty `provider/model` it stores
+ * would be a lie rather than a blank.
+ *
+ * @param {any} definition - the stored definition.
+ * @returns {string} `"Codex"`, or `"provider/model[ · effort]"`.
+ */
+export function subagentRouteLabel(definition) {
+  if (subagentBackend(definition) === 'codex') return 'Codex';
+  const provider = typeof definition?.provider === 'string' ? definition.provider : '';
+  const model = typeof definition?.model === 'string' ? definition.model : '';
+  const effort = typeof definition?.reasoningEffort === 'string' && definition.reasoningEffort !== ''
+    ? ` · ${definition.reasoningEffort}`
+    : '';
+  return `${provider}/${model}${effort}`;
+}
+
+/**
  * Whether a string is a usable Subagent key.
  *
  * @param {unknown} key - candidate.
@@ -358,6 +431,18 @@ export function validateProfilePerspective(profile, perspective) {
  * {@link validateSubagentEdit}. This function answers "is this a well-formed
  * definition at all".
  *
+ * The rules are split by backend, and that split is the substance of the 0.6.0
+ * data model:
+ *
+ * - `spawn` — and every pre-0.6.0 definition, which carries no backend at all —
+ *   must name the DSH LLM route it runs on. Nothing in this plugin substitutes
+ *   one.
+ * - `codex` must **not** be held to that rule. `provider`/`model`/
+ *   `reasoningEffort` are DSH LLM route fields; a Codex child's model comes from
+ *   the Codex provider's own configuration, which this plugin neither reads nor
+ *   writes. Demanding a route here would force the user to type a model id that
+ *   is never used, and then fail the dispatch on it.
+ *
  * @param {any} candidate - the proposed definition.
  * @returns {string[]} every problem found, empty when the definition is sound.
  */
@@ -382,11 +467,18 @@ export function validateSubagentDefinition(candidate) {
       'description is required: it is what the model reads when choosing an agent, so "案例检索员" alone is not enough',
     );
   }
-  if (typeof candidate.provider !== 'string' || candidate.provider === '') {
-    problems.push('provider is required (the LLM route provider id, for example "kimi-coding")');
+  if (!isValidSubagentBackend(candidate.backend)) {
+    problems.push(
+      `backend, when present, must be one of ${SUBAGENT_BACKENDS.join(', ')} (got ${JSON.stringify(candidate.backend)}). It is never inferred: an unknown value is refused rather than run on a transport you did not choose`,
+    );
   }
-  if (typeof candidate.model !== 'string' || candidate.model === '') {
-    problems.push('model is required (the model id within that provider)');
+  if (subagentBackend(candidate) === 'spawn') {
+    if (typeof candidate.provider !== 'string' || candidate.provider === '') {
+      problems.push('provider is required for a DSH-subagent backend (the LLM route provider id, for example "kimi-coding")');
+    }
+    if (typeof candidate.model !== 'string' || candidate.model === '') {
+      problems.push('model is required for a DSH-subagent backend (the model id within that provider)');
+    }
   }
   if (candidate.reasoningEffort !== undefined && typeof candidate.reasoningEffort !== 'string') {
     problems.push('reasoningEffort, when present, must be a string');

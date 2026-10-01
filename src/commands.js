@@ -31,7 +31,7 @@
  */
 
 import { SubagentRunFailedError, WorkspaceProfileError } from './errors.js';
-import { PERSPECTIVE_LABELS, perspectivesFor } from './policy.js';
+import { PERSPECTIVE_LABELS, perspectivesFor, subagentRouteLabel } from './policy.js';
 import { sessionIdOf } from './session-perspective.js';
 
 /** The registered command name, without the leading slash. */
@@ -88,9 +88,7 @@ export function registerAgentCommand(ctx, { getDispatcher }) {
           task,
           signal: invocation.signal,
         });
-        const route = `${outcome.subagent.provider}/${outcome.subagent.model}${
-          outcome.subagent.reasoningEffort === undefined ? '' : ` · ${outcome.subagent.reasoningEffort}`
-        }`;
+        const route = outcome.subagent.routeLabel;
         return {
           kind: 'success',
           text: `【${outcome.subagent.name}】(${route}) 已完成：\n\n${outcome.text === '' ? '（没有文本输出）' : outcome.text}`,
@@ -138,9 +136,7 @@ export function renderAgentList({ context, subagents }) {
     );
   }
   const rows = subagents.map((definition) => {
-    const route = `${definition.provider}/${definition.model}${
-      definition.reasoningEffort === undefined ? '' : ` · ${definition.reasoningEffort}`
-    }`;
+    const route = subagentRouteLabel(definition);
     return `  ${definition.key.padEnd(20)} ${definition.name}  (${route})\n      ${definition.description}`;
   });
   return (

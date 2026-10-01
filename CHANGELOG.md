@@ -8,6 +8,86 @@ this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versions before 0.2.0 were developed in a private workspace and are not itemised
 here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
 
+## [0.6.0] — 2026-10-01
+
+### Added
+
+- **A Workspace Subagent can run on the official Codex backend.** The definition
+  gains one field, `backend: 'spawn' | 'codex'`, and the dispatcher branches on it.
+  A `codex` definition names **no** DSH route: its model comes from the Codex
+  provider's own configuration, which this plugin neither reads nor writes. The two
+  backends get separate requests — `buildSpawnRequest()` and `buildCodexRequest()` —
+  because an out-of-process backend advertises no start capabilities, and the seam
+  *rejects* a request carrying `agentOptions`, `persona`, `maxDepth`, `toolFilter` or
+  `outputSchema` rather than ignoring it. The identity a `spawn` child receives as a
+  persona is compiled into a Codex child's assignment instead.
+- **`代码专家` (`code-expert`, Codex) and `代码架构师` (`code-architect`, spawn)**
+  templates, beside the existing 律师助理 / 独立评审员 / 码农. The architect's model is
+  **not** hard-coded: the template names the model as the plan spells it ("GPT-6.1
+  Sol") and the real `provider`/`model` is resolved from the live catalogue when the
+  template is applied. Only a unique match that supports `high` is filled in;
+  otherwise nothing is filled, no other model is substituted, and the dialog says
+  why.
+- **`执行方式` in the Subagent editor**, offering `DSH 子代理` and `Codex`. Choosing
+  Codex hides Provider / Model / Reasoning and shows the execution backend, the model
+  rule, and whether a Codex backend is actually registered in this deployment.
+- **`@子代理`** — a new input-trigger source (`trigger: '@'`, `name:
+  'workspace-subagents'`) that lists the current Workspace's enabled experts and
+  runs one directly. Leading tokens only, so `请让 @代码专家 看看` stays prose. Both
+  the display name and the key are searchable; a display name shared by two experts
+  is never guessed and the notice names the keys to use instead. Every path goes
+  through `/agent`, so there is no fourth execution path.
+- **`subagentsForSession({ sessionId })`**, a read-only Remote method returning the
+  `@` menu's rows (`key`, `name`, `description`, `backend`, `routeLabel`) plus the
+  Workspace it resolved to, cached per session in the browser and invalidated by
+  settings writes and connection resets.
+- `capabilities.codexBackend` / `codexBackendProblem` on the Settings snapshot: the
+  first names the registered provider when there is one, the second distinguishes a
+  detection *failure* from a backend that is simply absent.
+
+### Changed
+
+- **The requirements a dispatched child is sent now depend on its role.** The
+  dispatch prompt used to end with a legal citation rule — 引用法条…案号与法院 — for
+  every agent in every Workspace, including the coding ones. Roles are split into
+  `legal` and `engineering` (and `general`, implemented at the compiler level), and
+  the three engineering roles receive code-citation and verification rules instead.
+  No new stored field: the role decides, and `legal` remains the fallback so an
+  existing legal agent's assignment is unchanged.
+- The model-visible expert directory now reads `执行：Codex` where it used to print
+  `${provider}/${model}` — a Codex definition stores neither, so the old format
+  printed `undefined/undefined` for exactly the new role.
+- `workspace_subagent`'s output gains `backend` and `routeLabel`; `provider` and
+  `model` become optional, because a Codex run has neither.
+- `validateRoute` accepts a `backend`, so a Codex definition is answered by the
+  backend rule rather than by the LLM route rule, and a deployment with no model
+  adapter can still dispatch Codex.
+
+### Fixed
+
+- **Every write from the Subagent page was being refused.** `updateDefinition`
+  rejected any patch that merely *mentioned* `id`, `key` or `createdAt`, and the page
+  echoes the whole definition back on every write — so the enable/disable switch and
+  the editor had both failed with `invalid-subagent` since `v0.1.2`, and the only
+  evidence was an error notice. The guard now compares values, which is what the rule
+  is about; a real rename is still refused loudly. `test/subagents-operation.test.js`
+  closes the gap that hid it by driving the browser's own payload through the host's
+  own operation.
+
+### Notes
+
+- **No migration.** Definitions stored by 0.5.0 and earlier have no `backend` field,
+  and an absent field is read as `spawn` — what those records actually did. Nothing
+  is rewritten; the field is written only when the user creates or edits through the
+  0.6.0 page.
+- **The Codex backend is not a dependency.** `@deepseek-ai/dsh-subagent-codex` is not
+  installed in either distribution verified here. The plugin detects a registered
+  Codex provider from the live registry and, when there is none, fails with a named
+  error. It never installs a package, never falls back to `spawn`, and never
+  substitutes a model.
+- **The Host half must be restarted** for the new Remote method, validation and
+  dispatcher to take effect; the browser half hot-reloads on its own.
+
 ## [0.5.0] — 2026-09-26
 
 ### Fixed
@@ -175,6 +255,8 @@ here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
   cannot find.
 - Real client data was removed before this repository was published.
 
+[0.6.0]: https://github.com/vansonffff/dsh-workspace-profile/compare/v0.5.0...main
+[0.5.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.5.0
 [0.4.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.4.0
 [0.3.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.3.0
 [0.2.1]: https://github.com/vansonffff/dsh-workspace-profile/compare/2a87487...v0.3.0

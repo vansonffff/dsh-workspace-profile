@@ -11,7 +11,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { compileDispatchTask, compilePersona, renderSubagentOutput, sanitizeTemplateText } from '../src/subagent-registry.js';
+import {
+  ENGINEERING_SUBAGENT_KEYS,
+  compileBaseTask,
+  compilePersona,
+  compileTaskFor,
+  renderSubagentOutput,
+  sanitizeTemplateText,
+  subagentDomain,
+} from '../src/subagent-registry.js';
 import { composeAgentDirectorySection, composePerspectiveSection, composeProfileSection } from '../src/profile-runtime.js';
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt';
 
@@ -94,12 +102,12 @@ test('an empty Perspective is stated as absent, never implied', () => {
     perspectiveLabel: '',
   });
   assert.ok(!persona.includes('工作立场是'));
-  const task = compileDispatchTask({ task: 't', workspaceTitle: 'W', profileLabel: 'General', perspectiveLabel: '' });
+  const task = compileBaseTask({ task: 't', workspaceTitle: 'W', profileLabel: 'General', perspectiveLabel: '' });
   assert.ok(task.includes('工作立场：未指定'));
 });
 
 test('the dispatch task carries the model text verbatim inside a delimiter', () => {
-  const task = compileDispatchTask({
+  const task = compileBaseTask({
     task: '  检索争议焦点二的相关案例。\n\n并列明可核验来源。  ',
     workspaceTitle: '华北地产重整',
     profileLabel: '破产重整',
@@ -246,7 +254,7 @@ function policyWith(subagents) {
 }
 
 test('the dispatch task carries the Matter a child could not otherwise recover', () => {
-  const task = compileDispatchTask({
+  const task = compileBaseTask({
     task: 't',
     workspaceTitle: '示例系列案件',
     profileLabel: '诉讼 (Litigation)',
@@ -269,7 +277,7 @@ test('the dispatch task carries the Matter a child could not otherwise recover',
 });
 
 test('a Matter name is user-authored text and is sanitized like any other', () => {
-  const task = compileDispatchTask({
+  const task = compileBaseTask({
     task: 't',
     workspaceTitle: 'W',
     profileLabel: 'P',
@@ -282,7 +290,135 @@ test('a Matter name is user-authored text and is sanitized like any other', () =
 
 test('no Matter adds nothing at all, rather than an empty heading', () => {
   for (const matter of [undefined, null, {}]) {
-    const task = compileDispatchTask({ task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '', matter });
+    const task = compileBaseTask({ task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '', matter });
     assert.ok(!task.includes('案件 (Matter)：'), `matter=${JSON.stringify(matter)} must add no block`);
   }
+});
+
+/* -------------------------------------------------------------------------- */
+/* Which requirements a child is sent                                          */
+/* -------------------------------------------------------------------------- */
+
+test('the legal requirements are the pre-0.6.0 text, unchanged', () => {
+  // The fallback is not a classification of anyone's work: it is what every
+  // definition stored before 0.6.0 was sent, and dropping it from a real legal
+  // agent's assignment would be a regression this upgrade may not cause.
+  const task = compileBaseTask({ task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '' });
+  assert.ok(task.includes('要求：'));
+  assert.ok(task.includes('引用法条给出法规名称与条号，引用案例给出案号与法院'), 'legal keeps its citation rule');
+  assert.ok(task.includes('已查明事实 / 当事人主张 / 推断 / 未知'));
+  // And the default is the legal set, for a caller that says nothing.
+  assert.equal(task, compileBaseTask({ task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '', domain: 'legal' }));
+});
+
+test('an engineering child is never told to cite statutes', () => {
+  // The pollution the plan names: every agent in every workspace used to receive
+  // the legal citation rule, including the coding ones.
+  const task = compileBaseTask({
+    task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '', domain: 'engineering',
+  });
+  assert.ok(!task.includes('引用法条'), 'no statute rule for engineering work');
+  assert.ok(!task.includes('案号与法院'));
+  assert.ok(task.includes('引用代码必须给出文件路径与函数/符号名'));
+  assert.ok(task.includes('已核实（实际读过或实际运行过）'));
+  // The parts that genuinely apply everywhere are still there.
+  assert.ok(task.includes('无法核验的内容必须显式标注'));
+  assert.ok(task.includes('输出使用与任务相同的语言'));
+});
+
+test('a general child gets neither domain rule', () => {
+  const task = compileBaseTask({
+    task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '', domain: 'general',
+  });
+  assert.ok(!task.includes('引用法条'));
+  assert.ok(!task.includes('引用代码'));
+  assert.ok(task.includes('区分「已核实 / 推断 / 未知」'));
+});
+
+test('the domain is decided by the role, and legal stays the fallback', () => {
+  const base = { id: 'a', name: 'x', description: 'x' };
+  // The three built-in engineering roles, wherever they are used — including in a
+  // litigation Workspace, where the fallback would otherwise hand 码农 the
+  // statute-citation rule.
+  for (const key of ENGINEERING_SUBAGENT_KEYS) {
+    assert.equal(subagentDomain({ ...base, key }), 'engineering', `${key} is engineering work`);
+  }
+  // Every codex definition is engineering by construction.
+  assert.equal(subagentDomain({ ...base, key: 'anything', backend: 'codex' }), 'engineering');
+  // Everything else keeps exactly what it had in 0.5.0.
+  assert.equal(subagentDomain({ ...base, key: 'assist' }), 'legal');
+  assert.equal(subagentDomain({ ...base, key: 'reviewer' }), 'legal');
+  assert.equal(subagentDomain({ ...base, key: 'case-researcher' }), 'legal');
+  assert.equal(subagentDomain({ ...base, key: 'agent-3f9a2c1b', backend: 'spawn' }), 'legal');
+  assert.equal(subagentDomain(undefined), 'legal');
+});
+
+test('the engineering roles named by the plan are exactly the engineering keys', () => {
+  // The plan's §11 names 码农 / 代码专家 / 代码架构师. If a key is added or renamed
+  // here without the matching template, the role silently starts receiving the
+  // legal requirements again.
+  assert.deepEqual([...ENGINEERING_SUBAGENT_KEYS], ['coding', 'code-expert', 'code-architect']);
+});
+
+test('compileTaskFor picks the compiler the backend needs', () => {
+  const input = { task: '修 KDocs Sidebar', workspaceTitle: 'DSH', profileLabel: 'General', perspectiveLabel: '' };
+  const spawn = compileTaskFor({ definition: { key: 'coding', name: '码农', description: 'd' }, ...input });
+  // Spawn: identity rides the persona, so the assignment does not restate it.
+  assert.ok(!spawn.includes('角色：'));
+  assert.ok(spawn.includes('引用代码必须给出文件路径'), 'a coding role gets the engineering requirements');
+  assert.ok(!spawn.includes('引用法条'));
+
+  const codex = compileTaskFor({
+    definition: { key: 'code-expert', name: '代码专家', description: '在真实代码仓库中完成工程任务', backend: 'codex' },
+    ...input,
+  });
+  // Codex: this backend has no persona channel, so identity is compiled in.
+  assert.ok(codex.includes('角色：代码专家'));
+  assert.ok(codex.includes('职责：'));
+  assert.ok(codex.includes('在真实代码仓库中完成工程任务'));
+  assert.ok(codex.includes('工程原则：'));
+  assert.ok(codex.includes('先读后改'));
+  assert.ok(codex.includes('验收要求：'));
+  assert.ok(codex.includes('修 KDocs Sidebar'));
+  assert.ok(codex.includes('工作区：DSH'));
+  assert.ok(!codex.includes('引用法条'), 'and it is engineering work, not legal work');
+});
+
+test('a Codex assignment carries the supplementary guidance, and a spawn one does not duplicate it', () => {
+  const definition = {
+    key: 'code-expert', name: '代码专家', description: 'd', backend: 'codex',
+    instructions: '这个仓库的测试用 /usr/local/bin/node 跑。',
+  };
+  const codex = compileTaskFor({ definition, task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '' });
+  assert.ok(codex.includes('补充要求：'));
+  assert.ok(codex.includes('/usr/local/bin/node'));
+
+  const spawnDefinition = { key: 'coding', name: '码农', description: 'd', instructions: '同上' };
+  const spawn = compileTaskFor({ definition: spawnDefinition, task: 't', workspaceTitle: 'W', profileLabel: 'P', perspectiveLabel: '' });
+  assert.ok(!spawn.includes('补充要求：'), 'spawn guidance rides the persona; repeating it in the task would say it twice');
+});
+
+test('a Codex assignment is template-safe like every other', () => {
+  const codex = compileTaskFor({
+    definition: {
+      key: 'code-expert', name: '代码{{expert}}', description: 'd{{anger}}', instructions: 'i{{x}}', backend: 'codex',
+    },
+    task: 't', workspaceTitle: 'W{}', profileLabel: 'P', perspectiveLabel: '',
+  });
+  assert.ok(!/\{\{/.test(codex), 'no strict-template delimiter may survive into a prompt section');
+});
+
+test('the expert directory says where each agent runs, including Codex', () => {
+  const policy = policyWith([
+    { ...DEFINITION, id: 'a', key: 'coding', name: '码农', provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' },
+    { id: 'b', key: 'code-expert', name: '代码专家', description: '在真实代码仓库中完成工程任务', backend: 'codex', enabled: true },
+  ]);
+  const section = composeAgentDirectorySection(policy);
+  // The model reads this list to choose an agent, so the route has to be part of
+  // it — and for a Codex agent the route is the backend, not the empty
+  // `provider/model` its definition legitimately does not carry.
+  assert.ok(section.includes('执行：deepseek-official/deepseek-flash · max'), section);
+  assert.ok(section.includes('执行：Codex'), section);
+  assert.ok(!section.includes('undefined'), 'an absent route must never render as undefined');
+  assert.ok(section.includes('`code-expert`'));
 });

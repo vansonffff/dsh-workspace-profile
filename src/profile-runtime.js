@@ -64,6 +64,7 @@ import {
   enabledSubagents,
   perspectivesFor,
   recommendedSkills,
+  subagentRouteLabel,
 } from './policy.js';
 
 /**
@@ -329,9 +330,13 @@ export function composeAgentDirectorySection(policy) {
   if (subagents.length === 0) return '';
 
   const rows = subagents.map((definition) => {
-    const route = `${definition.provider}/${definition.model}${definition.reasoningEffort ? ` · ${definition.reasoningEffort}` : ''}`;
+    // The route label comes from `policy.js`, so the directory, the `@` mention
+    // catalog and the Settings card cannot disagree about where an agent runs —
+    // and so a Codex agent reads as `执行：Codex` rather than as the empty
+    // `provider/model` its definition legitimately does not carry.
+    const route = subagentRouteLabel(definition);
     // Name and description are user-authored; see the sanitizer's contract.
-    return `- \`${definition.key}\` — ${sanitizeTemplateText(definition.name)}（${route}）：${sanitizeTemplateText(definition.description)}`;
+    return `- \`${definition.key}\` — ${sanitizeTemplateText(definition.name)}（执行：${route}）：${sanitizeTemplateText(definition.description)}`;
   });
 
   return (

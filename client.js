@@ -535,12 +535,25 @@ window.__ModuleLoader__.load({
      * it is the line the model reads when choosing an agent, so a rewrite here
      * would quietly change whom the dispatcher picks.
      *
+     * ## Three shapes of route, and why `model` is not always a model id
+     *
+     * - a **fixed route** (`provider` + `model`) is written down, for the agents
+     *   whose model is a deliberate product decision;
+     * - a **backend with no DSH route at all** (`backend: 'codex'`) writes
+     *   neither, because Codex chooses its own model from its own configuration;
+     * - a **model spec** (`modelSpec`, e.g. "GPT-6.1 Sol") is looked up in the
+     *   live catalog when the template is applied. The real `provider`/`model`
+     *   ids of a model whose name the plan gives in prose are **not** knowable
+     *   from source, and hard-coding a guess would produce a template that fails
+     *   its own preflight. If the catalog does not answer with exactly one
+     *   candidate for the spec, the template fills nothing and says so.
+     *
      * Module-level and exported on purpose. The create dialog only renders while
      * it is open, and the browser test harness builds a static tree, so a
      * template's correctness cannot be observed through that tree — it can be
      * observed here, where it is data.
      *
-     * @type {ReadonlyArray<{ id: string, label: string, key: string, name: string, description: string, provider: string, model: string, reasoningEffort: string, instructions: string }>}
+     * @type {ReadonlyArray<{ id: string, label: string, key: string, name: string, description: string, backend: string, provider?: string, model?: string, modelSpec?: string, reasoningEffort?: string, instructions: string }>}
      */
     const SUBAGENT_TEMPLATES = [
       {
@@ -548,6 +561,7 @@ window.__ModuleLoader__.load({
         label: '独立评审员',
         key: 'reviewer',
         name: '独立评审员',
+        backend: 'spawn',
         description: '以外部身份独立评审法律观点或法律文书：不预设原结论正确，主动寻找反例与漏洞，指出依据不足之处，并区分「已查明事实／主张／推断／未知」。',
         provider: 'kimi-coding',
         model: 'k3',
@@ -559,6 +573,7 @@ window.__ModuleLoader__.load({
         label: '律师助理',
         key: 'assist',
         name: '律师助理',
+        backend: 'spawn',
         description: '承担整理文件、摘要、时间线、当事人信息整理、初步问题识别，以及格式、表格、数据转换与普通检索等大批量重复任务。',
         provider: 'deepseek-official',
         model: 'deepseek-flash',
@@ -570,6 +585,7 @@ window.__ModuleLoader__.load({
         label: '码农',
         key: 'coding',
         name: '码农',
+        backend: 'spawn',
         // The duties are the owner's own list, enumerated rather than collapsed
         // into "write code": this line is read when deciding whether a request
         // belongs to this agent, and a summary would hide repository analysis
@@ -580,7 +596,117 @@ window.__ModuleLoader__.load({
         reasoningEffort: 'max',
         instructions: '',
       },
+      {
+        id: 'code-expert',
+        label: '代码专家',
+        key: 'code-expert',
+        name: '代码专家',
+        // The Codex backend. No `provider`, no `model`, no `reasoningEffort`:
+        // those are DSH LLM route fields, and a Codex child's model comes from
+        // the Codex provider's own configuration. Writing a guess here would
+        // either be ignored or, worse, be enforced.
+        backend: 'codex',
+        description: '在真实代码仓库中完成工程任务：多文件实现、复杂 Bug 定位与修复、DSH 插件开发、CLI/MCP/Skill 开发、测试编写与执行、重构、构建错误处理、依赖与接口实现。',
+        instructions: '',
+      },
+      {
+        id: 'code-architect',
+        label: '代码架构师',
+        key: 'code-architect',
+        name: '代码架构师',
+        backend: 'spawn',
+        description: '以分析、设计和审查为主：系统架构设计、模块边界判断、复杂技术方案比较、根因分析、跨模块问题、大规模重构前设计、Codex 实现结果复核、技术债与兼容性分析、疑难问题的第二意见。',
+        // The plan names this model in prose ("GPT-6.1 Sol", high effort). Its
+        // real `provider/model` ids are resolved from the live catalog when the
+        // template is applied — see `resolveTemplateRoute`. Nothing here guesses
+        // them, and nothing falls back to a different GPT.
+        modelSpec: 'GPT-6.1 Sol',
+        reasoningEffort: 'high',
+        instructions: '',
+      },
     ];
+
+    /**
+     * Normalize a model name for comparison.
+     *
+     * Case, spaces, hyphens, underscores and dots are dropped, so `GPT-6.1 Sol`,
+     * `gpt-6.1-sol` and `GPT 6.1 Sol` are the same spec. Nothing else is: a
+     * prefix or fuzzy match would let `GPT-6.1-Sol-Mini` satisfy a request for
+     * `GPT-6.1 Sol`, and quietly running the architect's work on a different
+     * model is exactly what the plan forbids.
+     *
+     * @param {unknown} value - a name or id.
+     * @returns {string} the comparison form, `''` for a non-string.
+     */
+    function normalizeModelSpec(value) {
+      return typeof value === 'string' ? value.toLowerCase().replace(/[\s._-]+/g, '') : '';
+    }
+
+    /**
+     * Every catalog entry whose display name or id is the requested spec.
+     *
+     * @param {any} catalog - the `models()` answer, or `null` before it lands.
+     * @param {string} spec - the requested model, as the plan spells it.
+     * @returns {Array<{ provider: string, model: string, entry: any }>} the matches.
+     */
+    function matchModelSpec(catalog, spec) {
+      const wanted = normalizeModelSpec(spec);
+      if (wanted === '') return [];
+      const providers = (catalog && catalog.providers) || [];
+      const out = [];
+      for (const provider of providers) {
+        for (const entry of provider.models || []) {
+          if (normalizeModelSpec(entry.id) === wanted || normalizeModelSpec(entry.name) === wanted) {
+            out.push({ provider: provider.provider, model: entry.id, entry });
+          }
+        }
+      }
+      return out;
+    }
+
+    /**
+     * Resolve a template's model spec against the live catalog.
+     *
+     * The rule the plan sets out, implemented literally: **only a unique match
+     * that supports the requested effort is filled in**. Everything else reports
+     * why, and the dialog shows it, so the user picks from the real catalog
+     * instead of being handed a plausible-looking route that fails its own
+     * preflight.
+     *
+     * @param {any} catalog - the `models()` answer, or `null` when unavailable.
+     * @param {string} spec - the requested model name.
+     * @param {string} [effort] - the requested reasoning effort, when the template names one.
+     * @returns {{ ok: true, provider: string, model: string, reasoningEffort: string }
+     *   | { ok: false, reason: 'no-catalog'|'not-found'|'ambiguous'|'no-effort', candidates: string[] }}
+     *   the verdict.
+     */
+    function resolveTemplateRoute(catalog, spec, effort) {
+      if (catalog === null || catalog === undefined || catalog.available === false) {
+        return { ok: false, reason: 'no-catalog', candidates: [] };
+      }
+      const matches = matchModelSpec(catalog, spec);
+      if (matches.length === 0) return { ok: false, reason: 'not-found', candidates: [] };
+      if (matches.length > 1) {
+        return {
+          ok: false,
+          reason: 'ambiguous',
+          candidates: matches.map((match) => match.provider + '/' + match.model),
+        };
+      }
+      const [match] = matches;
+      if (typeof effort === 'string' && effort !== '') {
+        const efforts = (match.entry.efforts || []).map((entry) => entry.id);
+        if (!efforts.includes(effort)) {
+          return { ok: false, reason: 'no-effort', candidates: [match.provider + '/' + match.model] };
+        }
+      }
+      return {
+        ok: true,
+        provider: match.provider,
+        model: match.model,
+        reasoningEffort: typeof effort === 'string' ? effort : '',
+      };
+    }
 
     /**
      * The patch a template contributes to the create form.
@@ -597,17 +723,32 @@ window.__ModuleLoader__.load({
      * the Host assigns it, and an edit must never be the result of "create from
      * template".
      *
-     * @param {{ key: string, name: string, description: string, provider: string, model: string, reasoningEffort: string, instructions: string }} template - one entry of {@link SUBAGENT_TEMPLATES}.
-     * @returns {{ key: string, name: string, description: string, provider: string, model: string, reasoningEffort: string, instructions: string }} the form patch.
+     * A template with a `modelSpec` and no unique catalog match fills **nothing**
+     * into the route: see {@link resolveTemplateRoute}. That is the plan's red
+     * line — 不猜、不 fallback 到其他 GPT、不偷偷改模型.
+     *
+     * @param {{ key: string, name: string, description: string, backend?: string, provider?: string, model?: string, modelSpec?: string, reasoningEffort?: string, instructions: string }} template - one entry of {@link SUBAGENT_TEMPLATES}.
+     * @param {any} [catalog] - the live `models()` catalog, for templates whose route must be resolved.
+     * @returns {{ backend: string, key: string, name: string, description: string, provider: string, model: string, reasoningEffort: string, instructions: string }} the form patch.
      */
-    function templateFormPatch(template) {
+    function templateFormPatch(template, catalog) {
+      const backend = template.backend === 'codex' ? 'codex' : 'spawn';
+      /** @type {{ provider: string, model: string, reasoningEffort: string }} */
+      let route = { provider: template.provider || '', model: template.model || '', reasoningEffort: template.reasoningEffort || '' };
+      if (backend === 'spawn' && typeof template.modelSpec === 'string') {
+        const resolved = resolveTemplateRoute(catalog ?? null, template.modelSpec, template.reasoningEffort);
+        route = resolved.ok
+          ? { provider: resolved.provider, model: resolved.model, reasoningEffort: resolved.reasoningEffort }
+          : { provider: '', model: '', reasoningEffort: '' };
+      }
       return {
+        backend,
         key: template.key,
         name: template.name,
         description: template.description,
-        provider: template.provider,
-        model: template.model,
-        reasoningEffort: template.reasoningEffort,
+        provider: route.provider,
+        model: route.model,
+        reasoningEffort: route.reasoningEffort,
         instructions: template.instructions,
       };
     }
@@ -726,6 +867,23 @@ window.__ModuleLoader__.load({
         fTemplate: '模板',
         templateNone: '不用模板 —',
         templateHint: '选中即填入下列字段，保存前都可以改。模板只是建议值，不会替你保存。',
+        templateNeedsModel: '这个模板的模型不能写死，已从实时模型目录里找过：',
+        templateModelResolved: '已按实时模型目录填入：',
+        templateModelNoCatalog: '拿不到实时模型目录（本部署没有可用的模型服务），因此没有替你填模型，请手动选择。',
+        templateModelNotFound: '实时模型目录里没有唯一匹配的模型，因此没有替你填，也不会 fallback 到其他模型，请手动选择。',
+        templateModelAmbiguous: '实时模型目录里有多个同名匹配，插件不猜，请手动选择：',
+        templateModelNoEffort: '匹配到的模型不支持模板要求的推理强度，因此没有替你填，请手动选择：',
+        fBackend: '执行方式',
+        backendSpawn: 'DSH 子代理',
+        backendCodex: 'Codex',
+        backendHint: 'DSH 子代理走本部署的模型路由（提供方 / 模型 / 推理强度）。Codex 使用官方 Codex 后端，模型跟随 Codex 原生配置，本插件不接管。',
+        backendNoteTitle: '执行后端',
+        backendNoteCodex: '模型：跟随 Codex 原生配置',
+        backendNoteSpawn: '模型：本部署的模型路由（见下方）',
+        codexAvailable: 'Codex 后端可用',
+        codexMissing: 'Codex 后端未安装',
+        codexMissingHint: '本部署没有注册 Codex 子代理后端。插件不会自动安装、也不会改用 DSH 子代理或换模型；保存后调用会直接报错说明原因。',
+        codexProblem: 'Codex 后端检测失败：',
         fRoute: '模型路由（Route）',
         fProvider: '提供方',
         fModel: '模型',
@@ -753,6 +911,17 @@ window.__ModuleLoader__.load({
         conflict: '配置已被其他窗口修改，本次保存未写入。',
         noWorkspaceSelected: '请选择左侧的工作区。',
         capabilityMissing: '当前部署缺少所需服务：',
+        // ── `@子代理` ────────────────────────────────────────────────────────
+        // The menu group heading. The trigger source name is an identifier
+        // ("workspace-subagents") and the platform renders that as a fallback
+        // heading, so the reader-facing string travels on each candidate
+        // `section` field instead — the platform mechanism for naming a group in
+        // the reader language.
+        mentionGroup: '工作区子代理',
+        mentionNeedsTask: '继续写任务内容，回车即执行：',
+        mentionNoWorkspace: '这个会话不在任何已注册的工作区里，因此没有可用的工作区子代理。',
+        mentionUnknown: '没有已启用的子代理叫「{name}」。可用的 key：{keys}',
+        mentionAmbiguous: '有多个已启用的子代理显示名都是「{name}」，插件不猜是哪一个是哪一个，因此没有执行。请改用 key 指定：{keys}',
       },
       en: {
         nav: 'Workspaces',
@@ -868,6 +1037,23 @@ window.__ModuleLoader__.load({
         // Template labels, names and descriptions stay Chinese in every locale:
         // they are content the owner wrote, not UI copy this dictionary owns.
         templateHint: 'Fills the fields below; everything stays editable before saving. A template is a suggestion, never a saved definition.',
+        templateNeedsModel: 'This template must not hard-code its model. The live catalog was searched:',
+        templateModelResolved: 'Filled in from the live model catalog:',
+        templateModelNoCatalog: 'No live model catalog is available in this deployment, so no model was filled in — choose one yourself.',
+        templateModelNotFound: 'The live catalog has no unique match for this model, so nothing was filled in and no other model was substituted — choose one yourself.',
+        templateModelAmbiguous: 'The live catalog matched more than one entry; this plugin does not guess. Choose one yourself:',
+        templateModelNoEffort: 'The matched model does not offer the reasoning effort this template asks for, so nothing was filled in. Choose one yourself:',
+        fBackend: 'Execution',
+        backendSpawn: 'DSH subagent',
+        backendCodex: 'Codex',
+        backendHint: 'A DSH subagent runs on this deployment\'s model route (provider / model / reasoning effort). Codex uses the official Codex backend and follows Codex\'s own model configuration, which this plugin does not manage.',
+        backendNoteTitle: 'Execution backend',
+        backendNoteCodex: 'Model: follows the Codex configuration',
+        backendNoteSpawn: 'Model: this deployment\'s model route (below)',
+        codexAvailable: 'Codex backend is available',
+        codexMissing: 'Codex backend is not installed',
+        codexMissingHint: 'This deployment registers no Codex subagent backend. The plugin never installs one, never switches to the DSH subagent backend and never changes the model; a run will instead fail with the reason.',
+        codexProblem: 'Could not determine the Codex backend: ',
         fRoute: 'Route',
         fProvider: 'Provider',
         fModel: 'Model',
@@ -895,6 +1081,11 @@ window.__ModuleLoader__.load({
         conflict: 'The configuration changed in another window; this save was not written.',
         noWorkspaceSelected: 'Select a workspace on the left.',
         capabilityMissing: 'This deployment is missing: ',
+        mentionGroup: 'Workspace subagents',
+        mentionNeedsTask: 'Keep typing the task; Enter runs:',
+        mentionNoWorkspace: 'This session is not inside a registered workspace, so it has no workspace subagents.',
+        mentionUnknown: 'No enabled subagent is called "{name}". Available keys: {keys}',
+        mentionAmbiguous: 'Several enabled subagents share the display name "{name}", and this plugin never guesses which is which, so nothing was run. Name one by key instead: {keys}',
       },
     };
 
@@ -920,6 +1111,7 @@ window.__ModuleLoader__.load({
       { method: 'matter', implementation: 'remoteMatter', parameters: ARGS, cancellable: true },
       { method: 'models', implementation: 'remoteModels', parameters: [], cancellable: true },
       { method: 'validateRoute', implementation: 'remoteValidateRoute', parameters: ARGS, cancellable: true },
+      { method: 'subagentsForSession', implementation: 'remoteSubagentsForSession', parameters: ARGS, cancellable: true },
       { method: 'savePolicy', implementation: 'remoteSavePolicy', parameters: ARGS },
       { method: 'putSubagent', implementation: 'remotePutSubagent', parameters: ARGS },
       { method: 'duplicateSubagent', implementation: 'remoteDuplicateSubagent', parameters: ARGS },
@@ -1207,6 +1399,468 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ── `@子代理` ───────────────────────────────────────────────────────────
+    //
+    // The `@` trigger source that lets a user address a Workspace Subagent
+    // directly. Everything below is *selection*; nothing below runs anything.
+    // A pick, a typed `@key ` and the menu all end in the same place — a
+    // `CommandClaim` whose `submit` sends `/agent <key> <task>` to the Host — so
+    // the model tool, `/agent` and `@` share one execution path and cannot
+    // drift on the preflight, the depth cap, cancellation or disposal.
+    //
+    // ## The two platform facts this design is built on, both read from source
+    //
+    // - **`matchEnter` is not reached for an `@` draft today.** The composer's
+    //   submit machine adjudicates only drafts that start with `/`
+    //   (`ui-conversation`, `SubmitMachine.onEnter`: `if (trimmed.startsWith("/"))`
+    //   → `adjudicate`), so a leading `@码农 修一下` is submitted as an ordinary
+    //   message unless something claims it first. It is `matchSpace` that fires
+    //   for `@`: the controller's `onSpace()` polls every source registered for
+    //   the hit's trigger char, with no trigger filter. So typing `@码农` and
+    //   then a space is what claims the line, and the user then types the task.
+    //   `matchEnter` is still implemented — it is the contract's enter hook and
+    //   the adjudicator does iterate `@` sources when it is called — but the
+    //   served composer is not the thing that calls it for us.
+    // - **The group heading cannot come from `name`.** `name` is the source's
+    //   identity (duplicate `(trigger, name)` pairs throw) and the platform
+    //   renders `t(source.name)` as the fallback heading. The reader-facing
+    //   heading therefore travels on each candidate's `section`, which is the
+    //   platform's own mechanism for naming a group in the user's language.
+
+    /** The trigger character this source binds to. */
+    const MENTION_TRIGGER = '@';
+    /**
+     * The source's identity. Fixed by the plan, and load-bearing: it is what the
+     * platform keys the group by, so it must not change between releases.
+     */
+    const MENTION_SOURCE_NAME = 'workspace-subagents';
+    /** The command a mention ultimately runs. */
+    const MENTION_AGENT_COMMAND = 'agent';
+
+    /**
+     * One Session's mention cache.
+     *
+     * Per Session, because the answer is per Workspace and a Session's Workspace
+     * is the thing that decides it: a different Session is a different question,
+     * and one cache shared across sessions would answer it with another
+     * Workspace's experts.
+     *
+     * @type {Map<string, any>}
+     */
+    const MENTION_STATES = new Map();
+
+    /** The settings namespace whose writes invalidate the mention cache. */
+    const MENTION_SETTINGS_NAMESPACE = 'workspace-profile';
+
+    /**
+     * The cache entry for one Session, created on first use.
+     *
+     * @param {string} sessionId - the Session.
+     * @returns {any} its entry.
+     */
+    function mentionState(sessionId) {
+      let state = MENTION_STATES.get(sessionId);
+      if (state === undefined) {
+        state = {
+          sessionId,
+          status: 'cold',
+          generation: 0,
+          items: [],
+          workspaceId: null,
+          message: null,
+          error: null,
+          pending: undefined,
+          listeners: new Set(),
+        };
+        MENTION_STATES.set(sessionId, state);
+      }
+      return state;
+    }
+
+    /**
+     * Tell this Session's `subscribeLexicon` listeners that the roll moved.
+     *
+     * @param {any} state - the cache entry.
+     * @returns {void}
+     */
+    function notifyMention(state) {
+      for (const listener of [...state.listeners]) {
+        try {
+          listener();
+        } catch (error) {
+          // A listener is the render path. One that throws must not cost the
+          // others their notification, and must not escape into the fetch.
+          // eslint-disable-next-line no-console
+          console.error('[workspace-profile] a lexicon listener failed', error);
+        }
+      }
+    }
+
+    /**
+     * Drop cached mention catalogs.
+     *
+     * Called for every event that can change the answer while the page is open:
+     * a local write from the Settings section, any write to this settings
+     * namespace from anywhere (including another tab), and a connection reset —
+     * the platform's own signal that "wire-derived caches must repull".
+     *
+     * A `generation` bump is what makes a late answer from a superseded read
+     * harmless: the in-flight fetch checks it before writing, so a reply that
+     * arrives after the configuration changed cannot repopulate the cache with
+     * the older answer.
+     *
+     * @param {string} [sessionId] - one Session, or every Session when omitted.
+     * @returns {void}
+     */
+    function invalidateMentions(sessionId) {
+      for (const [key, state] of MENTION_STATES) {
+        if (sessionId !== undefined && key !== sessionId) continue;
+        state.generation += 1;
+        state.status = 'cold';
+        state.items = [];
+        state.pending = undefined;
+        notifyMention(state);
+      }
+    }
+
+    /**
+     * Read (or rejoin) the mention catalog for one Session.
+     *
+     * Concurrent callers share one request: the menu re-asks on every keystroke,
+     * and a `@` typed over a cold cache would otherwise issue one Remote call per
+     * character. The caller's own `signal` is deliberately **not** used for the
+     * fetch — it is superseded on every query change, and cancelling the shared
+     * read whenever the user types would mean the cache never filled. The
+     * caller's signal is still honoured where it matters: the answer is dropped
+     * if that caller has gone away.
+     *
+     * @param {any} remote - the mounted `remote.workspaceProfile` namespace.
+     * @param {string} sessionId - the Session.
+     * @returns {Promise<any>} the settled cache entry.
+     */
+    function loadMentions(remote, sessionId) {
+      const state = mentionState(sessionId);
+      if (state.status === 'ready' || state.status === 'failed') return Promise.resolve(state);
+      if (state.pending !== undefined) return state.pending;
+
+      const generation = state.generation;
+      state.status = 'loading';
+      state.pending = (async () => {
+        try {
+          const value = unwrap(await remote.subagentsForSession({ sessionId }));
+          if (state.generation !== generation) return state;
+          state.workspaceId = value && typeof value.workspaceId === 'string' ? value.workspaceId : null;
+          state.items = value && value.available === false ? [] : ((value && value.subagents) || []);
+          state.message = value && typeof value.message === 'string' ? value.message : null;
+          state.error = null;
+          state.status = 'ready';
+        } catch (error) {
+          if (state.generation !== generation) return state;
+          state.error = failureOf(error);
+          state.status = 'failed';
+        } finally {
+          if (state.generation === generation) {
+            state.pending = undefined;
+            notifyMention(state);
+          }
+        }
+        return state;
+      })();
+      // A failed read is reported to each awaiting caller; this keeps the shared
+      // promise from becoming an unhandled rejection when nobody is waiting.
+      state.pending.catch(() => {});
+      return state.pending;
+    }
+
+    /**
+     * Resolve one typed reference against the cache.
+     *
+     * Key wins outright. A display name is matched only when it is **unique**
+     * among enabled definitions: two experts can legitimately share a display
+     * name, and guessing which one the user meant would run their work on a
+     * coin toss. An ambiguous name is reported as such, and the caller refuses
+     * rather than picking — the plan's 重名 rule.
+     *
+     * @param {any[]} items - the cached mention rows.
+     * @param {string} reference - the text after `@`.
+     * @returns {{ ok: true, item: any } | { ok: false, reason: 'unknown'|'ambiguous', keys: string[] }} the verdict.
+     */
+    function matchMentionReference(items, reference) {
+      const wanted = typeof reference === 'string' ? reference.trim() : '';
+      if (wanted === '') return { ok: false, reason: 'unknown', keys: [] };
+      const byKey = items.find((item) => item.key === wanted);
+      if (byKey !== undefined) return { ok: true, item: byKey };
+      const byName = items.filter((item) => item.name === wanted);
+      if (byName.length === 1) return { ok: true, item: byName[0] };
+      if (byName.length > 1) {
+        return { ok: false, reason: 'ambiguous', keys: byName.map((item) => item.key).sort() };
+      }
+      return { ok: false, reason: 'unknown', keys: [] };
+    }
+
+    /**
+     * The menu rows for a query, in the platform's candidate shape.
+     *
+     * `name` is the **key** and `label` the display name, which is what makes
+     * both `@code-expert` and `@代码专家` find the same agent: the platform
+     * searches `name` and `label` (and renders the label with the name as a
+     * trailing alias when they differ).
+     *
+     * @param {any[]} items - the cached mention rows.
+     * @param {string} query - the live query between `@` and the caret.
+     * @param {string} section - the reader-facing group heading.
+     * @returns {any[]} the candidates, best match first.
+     */
+    function mentionRows(items, query, section) {
+      const rows = items.map((item) => ({
+        name: item.key,
+        label: item.name,
+        // Route first, then the responsibility line: the two questions a reader
+        // has are "which one is this" and "where does it run", and the row is
+        // one line wide.
+        description: item.routeLabel + ' · ' + item.description,
+        section,
+        value: item.key,
+      }));
+      const wanted = typeof query === 'string' ? query.trim().toLowerCase() : '';
+      if (wanted === '') return rows;
+      return rows
+        .filter((row) => mentionMatches(row.name, wanted) || mentionMatches(String(row.label || ''), wanted))
+        .sort((a, b) => mentionRank(a.name, wanted) - mentionRank(b.name, wanted)
+          || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    }
+
+    /**
+     * Whether a query is a case-insensitive, ordered subsequence of a name.
+     *
+     * Subsequence rather than substring so `@codexprt` still finds
+     * `code-expert` — the same matcher the platform's own `/` menu uses for
+     * command names, so the two menus feel the same.
+     *
+     * @param {string} haystack - the name to search.
+     * @param {string} needle - the lower-cased query.
+     * @returns {boolean} whether it matches.
+     */
+    function mentionMatches(haystack, needle) {
+      const text = haystack.toLowerCase();
+      let index = 0;
+      for (const character of needle) {
+        index = text.indexOf(character, index);
+        if (index === -1) return false;
+        index += 1;
+      }
+      return true;
+    }
+
+    /**
+     * Sort weight: prefix matches first, then by position of the first hit.
+     *
+     * @param {string} name - the candidate key.
+     * @param {string} needle - the lower-cased query.
+     * @returns {number} the weight.
+     */
+    function mentionRank(name, needle) {
+      const text = name.toLowerCase();
+      return text.startsWith(needle) ? 0 : text.indexOf(needle[0] ?? '') + 1;
+    }
+
+    /**
+     * Split a leading `@…` line into its reference and its task.
+     *
+     * Only the *first* whitespace-delimited run is the reference. The rest is the
+     * user's prose and is preserved verbatim — collapsing its internal spacing
+     * would be editing a task that is about to be handed to a model.
+     *
+     * @param {string} line - the trimmed draft.
+     * @returns {{ reference: string, task: string }|null} the parts, or `null` when
+     *   the line is not a leading `@` token.
+     */
+    function parseMentionLine(line) {
+      const text = typeof line === 'string' ? line.trim() : '';
+      if (!text.startsWith(MENTION_TRIGGER)) return null;
+      const body = text.slice(MENTION_TRIGGER.length);
+      const split = body.search(/\s/);
+      if (split === -1) return { reference: body, task: '' };
+      return { reference: body.slice(0, split), task: body.slice(split + 1) };
+    }
+
+    /**
+     * Send one `/agent` line and translate its settlement for the composer.
+     *
+     * Mirrors `dsh-client-ui-commands` on purpose, including the rule that an
+     * admitted command settles as success even when its *handler* failed: the
+     * Host durably logs the lifecycle and the outcome renders as a persistent
+     * flow node, so echoing it again would be a second copy of the same error.
+     * Only an admission failure — which never entered a handler and therefore
+     * logged nothing — needs the composer's own notice.
+     *
+     * @param {any} commands - the mounted `remote.commands` namespace.
+     * @param {string} sessionId - the Session scope of the call.
+     * @param {string} line - the complete slash-command line.
+     * @param {readonly any[]} attachments - serialized draft attachments.
+     * @returns {Promise<{ kind: 'success'|'error', text?: string }>} the outcome.
+     */
+    async function runAgentLine(commands, sessionId, line, attachments) {
+      const result = await commands.execute(sessionId, line, attachments ?? []);
+      if (result !== null && typeof result === 'object' && result.ok === false) {
+        const failure = result.error || {};
+        throw new Error('command.execute failed: ' + (failure.code || 'unknown') + ': ' + (failure.message || ''));
+      }
+      const value = result !== null && typeof result === 'object' && 'ok' in result ? result.value : result;
+      if (value === undefined) return { kind: 'error', text: 'unknown or malformed command: ' + line };
+      return { kind: 'success' };
+    }
+
+    /**
+     * Build the claim a mention produces.
+     *
+     * The claim's `token` is the spelling the draft keeps (`@码农 `), while the
+     * line that actually runs is the command's own (`/agent coding …`). Keeping
+     * the two apart is what lets a user write in Chinese and still reach a
+     * stable, typeable key.
+     *
+     * @param {object} input - the claim inputs.
+     * @param {any} input.commands - the mounted `remote.commands` namespace.
+     * @param {string} input.sessionId - the Session the call is scoped to.
+     * @param {string} input.key - the Subagent's key.
+     * @param {string} input.shown - the spelling kept in the draft.
+     * @param {string} input.askForTask - copy used when Enter arrives with no task.
+     * @returns {any} the `CommandClaim`.
+     */
+    function mentionClaim({ commands, sessionId, key, shown, askForTask }) {
+      return {
+        // The underlying command is `/agent` — this is what the composer keys
+        // per-command copy by, and what the Host actually executes.
+        name: MENTION_AGENT_COMMAND,
+        token: MENTION_TRIGGER + shown + ' ',
+        hint: askForTask + ' /' + MENTION_AGENT_COMMAND + ' ' + key,
+        submit: async (args, _actx, attachments) => {
+          const task = typeof args === 'string' ? args.trim() : '';
+          if (task === '') return { kind: 'error', text: askForTask };
+          return runAgentLine(commands, sessionId, '/' + MENTION_AGENT_COMMAND + ' ' + key + ' ' + args, attachments);
+        },
+      };
+    }
+
+    /**
+     * Create the `@` trigger source.
+     *
+     * @param {object} deps - the source's dependencies.
+     * @param {any} deps.remote - the `remote.workspaceProfile` namespace.
+     * @param {any} deps.commands - the `remote.commands` namespace.
+     * @param {Function} deps.t - the locale lookup.
+     * @returns {any} the `InputTriggerSource`.
+     */
+    function createMentionSource({ remote, commands, t }) {
+      return {
+        trigger: MENTION_TRIGGER,
+        name: MENTION_SOURCE_NAME,
+        // The heading rides each candidate's `section`; see the section note.
+        showGroupTitle: false,
+
+        async candidates(session, req) {
+          // Leading only. A mention in the middle of a sentence is prose — the
+          // user is talking *about* an agent, not dispatching one — and the plan
+          // makes that the rule rather than a preference, so no candidate is
+          // offered and the menu never opens there.
+          if (req.position !== 'leading') return [];
+          const state = await loadMentions(remote, session.sessionId);
+          // The caller's signal is superseded on every query change; an aborted
+          // ask must not render rows for a query that no longer exists.
+          if (req.signal !== undefined && req.signal.aborted) return [];
+          if (state.status !== 'ready') return [];
+          return mentionRows(state.items, req.query, t('mentionGroup'));
+        },
+
+        onPick(pick) {
+          if (pick.position !== 'leading') return undefined;
+          const key = typeof pick.candidate.value === 'string' && pick.candidate.value !== ''
+            ? pick.candidate.value
+            : pick.candidate.name;
+          const shown = typeof pick.candidate.label === 'string' && pick.candidate.label !== ''
+            ? pick.candidate.label
+            : key;
+          return {
+            claim: mentionClaim({
+              commands,
+              sessionId: pick.session.sessionId,
+              key,
+              shown,
+              askForTask: t('mentionNeedsTask'),
+            }),
+          };
+        },
+
+        matchSpace(session, token) {
+          if (typeof token !== 'string' || !token.startsWith(MENTION_TRIGGER)) return undefined;
+          // Hot state only, and synchronously: this runs mid-keystroke. A cold
+          // cache answers "not mine" rather than starting a fetch nobody can
+          // await, and the next space — or the menu — picks it up.
+          const state = MENTION_STATES.get(session.sessionId);
+          if (state === undefined || state.status !== 'ready') return undefined;
+          const found = matchMentionReference(state.items, token.slice(MENTION_TRIGGER.length));
+          if (!found.ok) return undefined;
+          return {
+            claim: mentionClaim({
+              commands,
+              sessionId: session.sessionId,
+              key: found.item.key,
+              shown: found.item.name,
+              askForTask: t('mentionNeedsTask'),
+            }),
+          };
+        },
+
+        async matchEnter(session, line, signal) {
+          const parsed = parseMentionLine(line);
+          if (parsed === null) return undefined;
+          const state = await loadMentions(remote, session.sessionId);
+          if (state.status !== 'ready') return undefined;
+          const found = matchMentionReference(state.items, parsed.reference);
+          if (found.ok !== true) {
+            // An unknown token may well be another source's (`@src/index.js`);
+            // an *ambiguous* one is unambiguously ours, and refusing loudly is
+            // the whole point — the draft is kept and the notice says what to
+            // type instead.
+            if (found.reason !== 'ambiguous') return undefined;
+            throw new Error(t('mentionAmbiguous', { name: parsed.reference, keys: found.keys.join(', ') }));
+          }
+          return {
+            claim: mentionClaim({
+              commands,
+              sessionId: session.sessionId,
+              key: found.item.key,
+              shown: found.item.name,
+              askForTask: t('mentionNeedsTask'),
+            }),
+          };
+        },
+
+        warm(session) {
+          // Scope birth: fetch once so the first `@` filters locally, and so the
+          // lexicons below have a roll to offer. Fire-and-forget by contract.
+          void loadMentions(remote, session.sessionId).catch(() => {});
+        },
+
+        lexicon(session) {
+          const state = MENTION_STATES.get(session.sessionId);
+          if (state === undefined || state.status !== 'ready') return undefined;
+          // Keys only. The platform's plain-text scan matches `[\w-]+` after the
+          // trigger, so a Chinese display name can never be a text reference —
+          // offering one would be a list nobody can match. `@code-expert` is.
+          return state.items.map((item) => item.key);
+        },
+
+        subscribeLexicon(session, listener) {
+          const state = mentionState(session.sessionId);
+          state.listeners.add(listener);
+          return () => {
+            state.listeners.delete(listener);
+          };
+        },
+      };
+    }
+
     // ── the section ─────────────────────────────────────────────────────────
 
     function WorkspaceCompositionSection(props) {
@@ -1289,6 +1943,19 @@ window.__ModuleLoader__.load({
       const workspaces = (snapshot && snapshot.workspaces) || [];
       const orphans = (snapshot && snapshot.orphans) || [];
       const selected = workspaces.find((workspace) => workspace.workspaceId === selectedId) || null;
+      /**
+       * Whether this deployment can actually run a Codex Subagent.
+       *
+       * Read from the Host's capability map, never inferred here: the answer is
+       * "which providers are registered in `ctx.subagents`", and only the Host
+       * can see that. `problem` carries a detection failure separately from
+       * absence, because "no Codex backend" and "I could not tell" call for
+       * different actions from the user.
+       */
+      const codex = {
+        available: !!(snapshot && snapshot.capabilities && snapshot.capabilities.codexBackend),
+        problem: (snapshot && snapshot.capabilities && snapshot.capabilities.codexBackendProblem) || null,
+      };
 
       // Default the selection to the first workspace, and repair it when the
       // selected one disappears.
@@ -1481,6 +2148,11 @@ window.__ModuleLoader__.load({
         if (result && result.saved === true && result.snapshot) {
           setSnapshot(result.snapshot);
           setNotice({ kind: 'success', text: t('save') + ' ✓' });
+          // A write here is a change to the `@` menu's answer, and this page is
+          // the one place it is edited. The `settings/document-updated` event
+          // covers it too, but dropping the cache directly makes the menu correct
+          // on the very next `@` rather than whenever the forwarded event lands.
+          invalidateMentions();
           return true;
         }
         const code = result ? result.code : 'unknown';
@@ -1905,6 +2577,7 @@ window.__ModuleLoader__.load({
               mode: dialog.mode,
               initial: dialog.subagent,
               validateRoute,
+              codex,
               onCancel: () => setDialog(null),
               onSubmit: async (value) => {
                 const ok = await putSubagent(value);
@@ -2171,8 +2844,17 @@ window.__ModuleLoader__.load({
      */
     function SubagentCard({ t, definition, busy, onEdit, onToggle, onDuplicate, onRemove }) {
       const enabled = definition.enabled !== false;
-      const route = definition.provider + '/' + definition.model
-        + (definition.reasoningEffort ? ' · ' + definition.reasoningEffort : '');
+      // The Host projects `routeLabel` for every definition, from the one
+      // function the model-visible directory also uses. The local fallback keeps
+      // the card rendering on an older Host that has not been restarted yet —
+      // which is this workspace's normal state while the client hot-reloads
+      // ahead of it — instead of printing `undefined/undefined`.
+      const route = typeof definition.routeLabel === 'string'
+        ? definition.routeLabel
+        : (definition.backend === 'codex'
+          ? 'Codex'
+          : definition.provider + '/' + definition.model
+            + (definition.reasoningEffort ? ' · ' + definition.reasoningEffort : ''));
       return jsxs('div', {
         className: C.subCard,
         style: { opacity: enabled ? 1 : 0.65 },
@@ -2217,14 +2899,19 @@ window.__ModuleLoader__.load({
 
     // ── subagent dialog ─────────────────────────────────────────────────────
 
-    function SubagentDialog({ t, models, mode, initial, validateRoute, onCancel, onSubmit }) {
+    function SubagentDialog({ t, models, mode, initial, validateRoute, onCancel, onSubmit, codex }) {
       const [form, setForm] = useState(() => ({
         id: initial ? initial.id : undefined,
         key: initial ? initial.key : '',
         name: initial ? initial.name : '',
         description: initial ? initial.description : '',
-        provider: initial ? initial.provider : '',
-        model: initial ? initial.model : '',
+        // `undefined` is what every pre-0.6.0 definition carries, and it means
+        // `spawn` — the same answer the Host's `subagentBackend` gives. Filling
+        // it in here is what makes editing an old definition write an explicit
+        // value without changing where it runs.
+        backend: initial && initial.backend === 'codex' ? 'codex' : 'spawn',
+        provider: initial ? initial.provider || '' : '',
+        model: initial ? initial.model || '' : '',
         reasoningEffort: initial ? initial.reasoningEffort || '' : '',
         instructions: initial ? initial.instructions || '' : '',
         enabled: initial ? initial.enabled : true,
@@ -2237,11 +2924,22 @@ window.__ModuleLoader__.load({
        * form stays the single source of truth for what will be saved.
        */
       const [templateId, setTemplateId] = useState('');
+      /**
+       * What applying a template had to say about the route it could not write.
+       *
+       * `null` when the template filled everything it owns. Otherwise
+       * `{ key, detail }` — the copy key plus the candidates, if any — rendered
+       * as a hint under the form. This is the plan's 不猜 / 不 fallback rule made
+       * visible: a template that could not resolve its model says so, rather
+       * than leaving the user with an empty route and no explanation.
+       */
+      const [templateNote, setTemplateNote] = useState(null);
 
       const providers = (models && models.providers) || [];
       const provider = providers.find((entry) => entry.provider === form.provider) || null;
       const modelEntry = provider ? (provider.models || []).find((entry) => entry.id === form.model) || null : null;
       const efforts = modelEntry ? modelEntry.efforts || [] : [];
+      const isCodex = form.backend === 'codex';
 
       const update = useCallback((patch) => setForm((current) => Object.assign({}, current, patch)), []);
 
@@ -2254,16 +2952,36 @@ window.__ModuleLoader__.load({
        */
       const applyTemplate = useCallback((id) => {
         setTemplateId(id);
+        setTemplateNote(null);
         const template = SUBAGENT_TEMPLATES.find((entry) => entry.id === id);
         // Choosing the placeholder clears the selection without touching what
         // was typed: there is nothing to restore it from.
         if (template === undefined) return;
-        update(templateFormPatch(template));
-      }, [update]);
+        update(templateFormPatch(template, models));
+        if (typeof template.modelSpec !== 'string') return;
+        const resolved = resolveTemplateRoute(models ?? null, template.modelSpec, template.reasoningEffort);
+        if (resolved.ok) {
+          setTemplateNote({ key: 'templateModelResolved', detail: resolved.provider + '/' + resolved.model });
+          return;
+        }
+        setTemplateNote({
+          key: resolved.reason === 'no-catalog' ? 'templateModelNoCatalog'
+            : resolved.reason === 'ambiguous' ? 'templateModelAmbiguous'
+              : resolved.reason === 'no-effort' ? 'templateModelNoEffort'
+                : 'templateModelNotFound',
+          prefix: 'templateNeedsModel',
+          detail: resolved.candidates.join('、'),
+        });
+      }, [update, models]);
 
       // Live route verdict. Cheap, and the difference between finding out here and
       // finding out when a delegation has already been paid for.
+      //
+      // Not asked at all for a Codex definition: it has no DSH LLM route, so the
+      // honest answer is "not applicable", which the form says in words instead
+      // of running a check that could only ever report a false failure.
       useEffect(() => {
+        if (isCodex) { setRoute(null); return undefined; }
         if (form.provider === '' || form.model === '') { setRoute(null); return undefined; }
         let alive = true;
         setRoute({ state: 'checking' });
@@ -2276,7 +2994,7 @@ window.__ModuleLoader__.load({
           }
         })();
         return () => { alive = false; };
-      }, [form.provider, form.model, form.reasoningEffort, validateRoute]);
+      }, [isCodex, form.provider, form.model, form.reasoningEffort, validateRoute]);
 
       const submit = useCallback(async () => {
         setBusy(true);
@@ -2286,18 +3004,27 @@ window.__ModuleLoader__.load({
             ...(form.key === '' ? {} : { key: form.key }),
             name: form.name,
             description: form.description,
-            provider: form.provider,
-            model: form.model,
-            reasoningEffort: form.reasoningEffort === '' ? undefined : form.reasoningEffort,
+            backend: form.backend,
+            // A Codex definition writes **no** route at all rather than an empty
+            // string: the fields are absent from its data model, and an empty
+            // `provider` would look like a route the user failed to finish.
+            ...(isCodex
+              ? {}
+              : {
+                  provider: form.provider,
+                  model: form.model,
+                  reasoningEffort: form.reasoningEffort === '' ? undefined : form.reasoningEffort,
+                }),
             instructions: form.instructions,
             enabled: form.enabled,
           });
         } finally {
           setBusy(false);
         }
-      }, [form, onSubmit]);
+      }, [form, isCodex, onSubmit]);
 
       const created = mode === 'create';
+      const codexReady = codex && codex.available === true;
 
       return jsx('div', {
         className: C.modalBackdrop,
@@ -2359,49 +3086,100 @@ window.__ModuleLoader__.load({
             ] }),
           ] }),
 
-          // The route is one concept — three selects that only mean anything
-          // together — so it gets one row and one label instead of three rows.
+          // 执行方式. Its own field group, above the route, because it decides
+          // whether there *is* a route: choosing Codex hides Provider / Model /
+          // Reasoning entirely and shows what will actually run instead. Hiding
+          // rather than disabling is deliberate — a greyed-out model picker on a
+          // backend that has no model reads as "you forgot to fill this in".
           jsxs('div', { className: C.fieldStack, children: [
-            jsx('label', { className: C.fieldStackLabel, children: t('fRoute') }),
-            jsxs('div', { className: C.routeRow, children: [
-              jsx('select', {
-                className: C.control,
-                style: s.select,
-                'aria-label': t('fProvider'),
-                value: form.provider,
-                onChange: (event) => update({ provider: event.target.value, model: '', reasoningEffort: '' }),
-                children: [jsx('option', { key: '', value: '', children: t('fProvider') + ' —' })].concat(
-                  providers.map((entry) => jsx('option', { key: entry.provider, value: entry.provider, children: entry.providerName || entry.provider })),
-                ),
-              }),
-              jsx('select', {
-                className: C.control,
-                style: s.select,
-                'aria-label': t('fModel'),
-                value: form.model,
-                disabled: provider === null,
-                onChange: (event) => update({ model: event.target.value, reasoningEffort: '' }),
-                children: [jsx('option', { key: '', value: '', children: t('fModel') + ' —' })].concat(
-                  (provider ? provider.models || [] : []).map((entry) => jsx('option', { key: entry.id, value: entry.id, children: entry.name })),
-                ),
-              }),
-              jsx('select', {
-                className: C.control,
-                style: s.select,
-                'aria-label': t('fEffort'),
-                value: form.reasoningEffort,
-                disabled: efforts.length === 0,
-                onChange: (event) => update({ reasoningEffort: event.target.value }),
-                children: [jsx('option', { key: '', value: '', children: efforts.length === 0 ? t('fEffort') + ' —' : t('effortDefault') })].concat(
-                  efforts.map((entry) => jsx('option', { key: entry.id, value: entry.id, children: entry.name })),
-                ),
-              }),
-            ] }),
-            route !== null
-              ? jsx('div', { className: C.notice + ' ' + (route.state === 'ok' ? C.noticeOk : route.state === 'checking' ? C.noticeNeutral : C.noticeError), children:
-                  route.state === 'checking' ? t('routeChecking') : route.state === 'ok' ? t('routeOk') : t('routeBad') + '：' + (route.reason || '') })
+            jsx('label', { className: C.fieldStackLabel, children: t('fBackend') }),
+            jsx('select', {
+              className: C.control,
+              style: s.select,
+              'aria-label': t('fBackend'),
+              value: form.backend,
+              // Switching backend clears the route it no longer describes, so a
+              // Codex definition can never carry a leftover `provider`, and
+              // switching back does not inherit a route from a different role.
+              onChange: (event) => update({ backend: event.target.value, provider: '', model: '', reasoningEffort: '' }),
+              children: [
+                jsx('option', { key: 'spawn', value: 'spawn', children: t('backendSpawn') }),
+                jsx('option', { key: 'codex', value: 'codex', children: t('backendCodex') }),
+              ],
+            }),
+            jsx('div', { className: C.fieldStackHint, children: t('backendHint') }),
+            isCodex
+              ? jsx('div', {
+                  className: C.notice + ' ' + (codexReady && codex.problem === null ? C.noticeOk : C.noticeWarn),
+                  children: [
+                    jsx('div', { children: t('backendNoteTitle') + '：' + t('backendCodex') }),
+                    jsx('div', { children: t('backendNoteCodex') }),
+                    jsx('div', {
+                      children: codexReady && codex.problem === null
+                        ? t('codexAvailable')
+                        : t('codexMissing') + (codex.problem === null ? '' : '（' + t('codexProblem') + codex.problem + '）'),
+                    }),
+                    jsx('div', { children: t('codexMissingHint') }),
+                  ],
+                })
+              : jsx('div', { className: C.fieldStackHint, children: t('backendNoteSpawn') }),
+            templateNote !== null
+              ? jsx('div', {
+                  className: C.notice + ' ' + (templateNote.prefix === undefined ? C.noticeOk : C.noticeWarn),
+                  children:
+                    (templateNote.prefix === undefined ? '' : t(templateNote.prefix))
+                    + t(templateNote.key)
+                    + (templateNote.detail === '' ? '' : ' ' + templateNote.detail),
+                })
               : null,
           ] }),
+
+          // The route is one concept — three selects that only mean anything
+          // together — so it gets one row and one label instead of three rows.
+          // Absent entirely for Codex: that backend has no DSH LLM route.
+          isCodex
+            ? null
+            : jsxs('div', { className: C.fieldStack, children: [
+                jsx('label', { className: C.fieldStackLabel, children: t('fRoute') }),
+                jsxs('div', { className: C.routeRow, children: [
+                  jsx('select', {
+                    className: C.control,
+                    style: s.select,
+                    'aria-label': t('fProvider'),
+                    value: form.provider,
+                    onChange: (event) => update({ provider: event.target.value, model: '', reasoningEffort: '' }),
+                    children: [jsx('option', { key: '', value: '', children: t('fProvider') + ' —' })].concat(
+                      providers.map((entry) => jsx('option', { key: entry.provider, value: entry.provider, children: entry.providerName || entry.provider })),
+                    ),
+                  }),
+                  jsx('select', {
+                    className: C.control,
+                    style: s.select,
+                    'aria-label': t('fModel'),
+                    value: form.model,
+                    disabled: provider === null,
+                    onChange: (event) => update({ model: event.target.value, reasoningEffort: '' }),
+                    children: [jsx('option', { key: '', value: '', children: t('fModel') + ' —' })].concat(
+                      (provider ? provider.models || [] : []).map((entry) => jsx('option', { key: entry.id, value: entry.id, children: entry.name })),
+                    ),
+                  }),
+                  jsx('select', {
+                    className: C.control,
+                    style: s.select,
+                    'aria-label': t('fEffort'),
+                    value: form.reasoningEffort,
+                    disabled: efforts.length === 0,
+                    onChange: (event) => update({ reasoningEffort: event.target.value }),
+                    children: [jsx('option', { key: '', value: '', children: efforts.length === 0 ? t('fEffort') + ' —' : t('effortDefault') })].concat(
+                      efforts.map((entry) => jsx('option', { key: entry.id, value: entry.id, children: entry.name })),
+                    ),
+                  }),
+                ] }),
+                route !== null
+                  ? jsx('div', { className: C.notice + ' ' + (route.state === 'ok' ? C.noticeOk : route.state === 'checking' ? C.noticeNeutral : C.noticeError), children:
+                      route.state === 'checking' ? t('routeChecking') : route.state === 'ok' ? t('routeOk') : t('routeBad') + '：' + (route.reason || '') })
+                  : null,
+              ] }),
 
           jsxs('div', { className: C.fieldStack, children: [
             jsx('label', { className: C.fieldStackLabel, children: t('fDescription') }),
@@ -2434,7 +3212,13 @@ window.__ModuleLoader__.load({
             jsx('button', {
               type: 'button',
               className: C.save,
-              disabled: busy || form.name.trim() === '' || form.provider === '' || form.model === '' || form.description.trim() === '',
+              // The route is required for a DSH subagent and *not* for a Codex
+              // one: it has no route to fill in, and demanding one would make
+              // the dialog unsaveable for the only backend that needs nothing.
+              disabled: busy
+                || form.name.trim() === ''
+                || form.description.trim() === ''
+                || (!isCodex && (form.provider === '' || form.model === '')),
               onClick: () => { void submit(); },
               children: created ? t('create') : t('save'),
             }),
@@ -2664,6 +3448,45 @@ window.__ModuleLoader__.load({
         }, (props) => jsx(SectionBoundary, {
           children: jsx(WorkspaceCompositionSection, props),
         })));
+
+        // ── the `@子代理` source ──────────────────────────────────────────────
+        //
+        // Nested inside this callback on purpose, and that is not tidiness: the
+        // namespace the source reads is the one **this** callback was handed. Read
+        // as `ctx.remote.workspaceProfile` from an independent `ctx.inject`, the
+        // source can be constructed before the mount above has resolved, and would
+        // then hold `undefined` for the lifetime of the page — every `@` reading a
+        // namespace that does not exist, with the failure swallowed into an empty
+        // menu.
+        //
+        // Gated on the trigger registry because it is optional: a composition
+        // without `ui-input-trigger` has no `@` menu at all, and the Settings
+        // section above must keep working there. Same for `remote.commands` — it is
+        // what a mention ultimately *runs*, so without it a source could offer
+        // candidates it could not dispatch, and a menu whose picks do nothing is
+        // worse than no menu.
+        const profileRemote = scoped.remote.workspaceProfile;
+        ctx.inject(['inputTriggers', 'remote.commands'], (mentionCtx) => {
+          const source = createMentionSource({
+            remote: profileRemote,
+            commands: mentionCtx.remote.commands,
+            t,
+          });
+          ctx.effect(() => mentionCtx.inputTriggers.registerSource(source), 'workspace-profile: @ subagent source');
+
+          // Two invalidations the source cannot see for itself.
+          //
+          // `settings/document-updated` fires for *any* write to this settings
+          // namespace, including one made in another window or tab, so a Subagent
+          // added elsewhere shows up in the `@` menu without a reload.
+          ctx.remote.$on('settings/document-updated', (ns) => {
+            if (ns === MENTION_SETTINGS_NAMESPACE) invalidateMentions();
+          });
+          // `connection/reset` is the platform's own statement that wire-derived
+          // caches must repull: a reconnected generation may be a different Host
+          // with different registered providers and a different stored document.
+          ctx.on('connection/reset', () => invalidateMentions());
+        });
       });
     }
 
@@ -2681,6 +3504,22 @@ window.__ModuleLoader__.load({
     // renders them is closed in every static tree, so nothing else can see them.
     exports.SUBAGENT_TEMPLATES = SUBAGENT_TEMPLATES;
     exports.templateFormPatch = templateFormPatch;
+    exports.resolveTemplateRoute = resolveTemplateRoute;
+    exports.matchModelSpec = matchModelSpec;
+    // The `@` source's pure parts, exported for the same reason the templates
+    // are: the composer that would exercise them only exists in a real browser,
+    // so a rule living only inside the registered source cannot be observed from
+    // a static tree. `createMentionSource` itself is exported so the harness can
+    // register it against a fake trigger registry and drive it as the platform
+    // would.
+    exports.createMentionSource = createMentionSource;
+    exports.mentionRows = mentionRows;
+    exports.matchMentionReference = matchMentionReference;
+    exports.parseMentionLine = parseMentionLine;
+    exports.mentionMatches = mentionMatches;
+    exports.invalidateMentions = invalidateMentions;
+    exports.MENTION_SOURCE_NAME = MENTION_SOURCE_NAME;
+    exports.MENTION_TRIGGER = MENTION_TRIGGER;
     return module.exports;
   },
 });

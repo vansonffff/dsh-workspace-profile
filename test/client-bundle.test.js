@@ -30,12 +30,24 @@ const SOURCE = await readFile(new URL('../client.js', import.meta.url), 'utf8');
 /**
  * Build a client context whose `slots.register` records both of its arguments.
  *
- * @returns {{ ctx: any, mounted: any[], registered: any[], injected: string[] }} the harness.
+ * The doubles deliberately mirror the *contract* rather than being permissive:
+ * `remote.$mount` returns a disposer, `remote.$on` returns an unsubscribe, and
+ * each `ctx.inject` dependency set receives exactly the service shape the real
+ * Cordis would hand it. A bare `{}` would let a missing method pass here and fail
+ * in the browser, which is the one failure mode this harness exists to prevent.
+ *
+ * @returns {{ ctx: any, mounted: any[], registered: any[], injected: string[], sources: any[], events: any[], commands: any[] }}
+ *   the harness. `sources` are the registered input-trigger sources, `events` the
+ *   `$on`/`on` subscriptions, and `commands` the `/agent` lines submitted.
  */
 function makeClientHarness() {
   const mounted = [];
   const registered = [];
   const injected = [];
+  const sources = [];
+  const events = [];
+  const commands = [];
+  const mentionReads = [];
   const ctx = {
     effect: (fn) => {
       const result = typeof fn === 'function' ? fn() : undefined;
@@ -43,6 +55,10 @@ function makeClientHarness() {
       return () => {};
     },
     locale: { register: () => () => {}, bind: () => (key) => key, subscribe: () => () => {} },
+    on: (event, listener) => {
+      events.push({ via: 'on', event, listener });
+      return () => {};
+    },
     slots: {
       inject: (name, fn) => {
         injected.push(name);
@@ -53,15 +69,60 @@ function makeClientHarness() {
         return () => {};
       },
     },
-    remote: { $mount: async (contribution) => { mounted.push(contribution); return () => {}; } },
+    remote: {
+      $mount: async (contribution) => { mounted.push(contribution); return () => {}; },
+      $on: (event, listener) => {
+        events.push({ via: 'remote', event, listener });
+        return () => {};
+      },
+    },
     inject: (deps, callback) => {
-      injected.push(deps.join(','));
+      const key = deps.join(',');
+      injected.push(key);
       // The namespace service the real Cordis would hand to the callback; a bare
       // `{}` would let a missing method pass this harness and fail in the browser.
-      callback({ remote: { workspaceProfile: { validateRoute: async () => ({ available: true }) } } });
+      if (key === 'inputTriggers,remote.commands') {
+        callback({
+          inputTriggers: {
+            registerSource: (source) => {
+              sources.push(source);
+              return () => {};
+            },
+          },
+          remote: {
+            commands: {
+              execute: async (sessionId, line, attachments) => {
+                commands.push({ sessionId, line, attachments });
+                return { ok: true, value: { commandId: 'cmd-1', result: { kind: 'success' } } };
+              },
+            },
+          },
+        });
+        return;
+      }
+      callback({
+        remote: {
+          workspaceProfile: {
+            validateRoute: async () => ({ available: true }),
+            /**
+             * The `@` source's read, on the same object the section receives.
+             *
+             * Deliberately present here rather than only in the mention tests: the
+             * source's *wiring* is what this harness can check — that `apply`
+             * hands it the namespace it mounted and the commands namespace it
+             * injected, rather than a reference read too early and left
+             * `undefined`.
+             */
+            subagentsForSession: async (args) => {
+              mentionReads.push(args);
+              return { ok: true, value: { available: true, workspaceId: 'ws-1', subagents: [] } };
+            },
+          },
+        },
+      });
     },
   };
-  return { ctx, mounted, registered, injected };
+  return { ctx, mounted, registered, injected, sources, events, commands, mentionReads };
 }
 
 function makeReact() {
@@ -703,6 +764,13 @@ async function renderSection({
   // The Matter read the Host would answer with. Default is "no matter.yaml here",
   // which is what an ordinary project directory produces.
   matter = null,
+  // Replace the Subagent fixture wholesale. The default pair is the 0.5.0 shape
+  // (a route, no `backend`), which is exactly what the projection of a pre-0.6.0
+  // record looks like — so a test that wants a Codex card has to say so.
+  subagentList = null,
+  // The Host's Codex verdict, as `capabilities` carries it.
+  codexBackend = null,
+  codexBackendProblem = null,
 } = {}) {
   const { entry, react, injected } = loadRenderableSection();
   const { ctx, registered } = makeClientHarness();
@@ -731,7 +799,10 @@ async function renderSection({
 
   const snapshot = {
     ready: true, revision: 7, schemaVersion: 1, initializedAt: '', readError: null,
-    capabilities: { settings: true, workspace: true, skills: true, models: true, systemPrompt: true, subagents: true },
+    capabilities: {
+      settings: true, workspace: true, skills: true, models: true, systemPrompt: true, subagents: true,
+      spawnProvider: true, codexBackend, codexBackendProblem,
+    },
     orphans: [],
     vocabulary: {
       profiles: vocabularyProfiles,
@@ -746,7 +817,7 @@ async function renderSection({
         policy: {
           profile: policyProfile, defaultPerspective: policyPerspective, onboardingStatus: policyOnboarding,
           skillOverrides: policySkillOverrides,
-          subagents: subagents === null ? [] : [
+          subagents: subagents === null ? [] : (subagentList ?? [
             {
               id: 'sub-1', key: 'legal-anylist', name: '高级顾问', enabled: true,
               description: '高级顾问，负责专业法律问题的深度分析',
@@ -759,7 +830,7 @@ async function renderSection({
               provider: 'deepseek-official', model: 'deepseek-flash',
               createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
             },
-          ],
+          ]),
         },
       },
       {
@@ -1874,9 +1945,22 @@ test('a template is a form preset, never a stored definition', () => {
     assert.match(template.key, /^[a-z0-9][a-z0-9-]{0,63}$/, `${template.id}: key must satisfy the Host's key grammar`);
     assert.ok(template.name.trim() !== '', `${template.id}: name is required by createDefinition`);
     assert.ok(template.description.trim() !== '', `${template.id}: description is what the model reads when choosing`);
-    assert.ok(template.provider.trim() !== '', `${template.id}: provider is required`);
-    assert.ok(template.model.trim() !== '', `${template.id}: model is required`);
     assert.ok(template.label.trim() !== '', `${template.id}: label is what the dropdown shows`);
+    assert.ok(['spawn', 'codex'].includes(template.backend), `${template.id}: a template names a real backend`);
+    if (template.backend === 'codex') {
+      // A Codex child has no DSH LLM route, and the Host no longer requires one.
+      // A template that supplied one anyway would store a field nothing reads.
+      assert.equal(template.provider, undefined, `${template.id}: a Codex template names no DSH provider`);
+      assert.equal(template.model, undefined, `${template.id}: a Codex template names no DSH model`);
+      assert.equal(template.reasoningEffort, undefined, `${template.id}: a Codex template names no reasoning effort`);
+      continue;
+    }
+    // A spawn template either writes a fixed route down or asks the live catalog
+    // for one. Anything else would be a template that cannot be saved.
+    const fixed = typeof template.model === 'string' && typeof template.provider === 'string';
+    const bySpec = typeof template.modelSpec === 'string' && template.modelSpec.trim() !== '';
+    assert.ok(fixed || bySpec, `${template.id}: a spawn template must fix its route or name a model spec`);
+    assert.equal(fixed && bySpec, false, `${template.id}: a template must not both fix a route and name a spec`);
   }
   const ids = list.map((template) => template.id);
   // JSON round-trip: the bundle runs in its own vm realm, so its arrays fail
@@ -1889,24 +1973,28 @@ test('the configured templates keep the routes they were given', () => {
   const reviewer = list.find((template) => template.id === 'reviewer');
   const assist = list.find((template) => template.id === 'assist');
   const coding = list.find((template) => template.id === 'coding');
+  const expert = list.find((template) => template.id === 'code-expert');
+  const architect = list.find((template) => template.id === 'code-architect');
   assert.ok(reviewer !== undefined, 'the independent reviewer template exists');
   assert.ok(assist !== undefined, 'the legal assistant template exists');
   assert.ok(coding !== undefined, 'the coding template exists');
+  assert.ok(expert !== undefined, 'the Codex code-expert template exists');
+  assert.ok(architect !== undefined, 'the code-architect template exists');
 
   assert.deepEqual(
-    { key: reviewer.key, name: reviewer.name, provider: reviewer.provider, model: reviewer.model, effort: reviewer.reasoningEffort },
-    { key: 'reviewer', name: '独立评审员', provider: 'kimi-coding', model: 'k3', effort: 'max' },
+    { key: reviewer.key, name: reviewer.name, backend: reviewer.backend, provider: reviewer.provider, model: reviewer.model, effort: reviewer.reasoningEffort },
+    { key: 'reviewer', name: '独立评审员', backend: 'spawn', provider: 'kimi-coding', model: 'k3', effort: 'max' },
   );
   // `deepseek-flash` is the model id; "DeepSeek-V41-Flash" is only its display
   // name. Writing the display name in a template is the mistake this pins down:
   // it looks right on the Models page and then fails the preflight.
   assert.deepEqual(
-    { key: assist.key, name: assist.name, provider: assist.provider, model: assist.model, effort: assist.reasoningEffort },
-    { key: 'assist', name: '律师助理', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' },
+    { key: assist.key, name: assist.name, backend: assist.backend, provider: assist.provider, model: assist.model, effort: assist.reasoningEffort },
+    { key: 'assist', name: '律师助理', backend: 'spawn', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' },
   );
   assert.deepEqual(
-    { key: coding.key, name: coding.name, provider: coding.provider, model: coding.model, effort: coding.reasoningEffort },
-    { key: 'coding', name: '码农', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' },
+    { key: coding.key, name: coding.name, backend: coding.backend, provider: coding.provider, model: coding.model, effort: coding.reasoningEffort },
+    { key: 'coding', name: '码农', backend: 'spawn', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' },
   );
   // The coding template's description is the owner's enumerated list of duties,
   // and that list is what the model reads when choosing an agent. Checked as
@@ -1915,6 +2003,17 @@ test('the configured templates keep the routes they were given', () => {
   for (const duty of ['代码仓库', 'Bug', '脚本', '工程配置', '测试', '重构', '依赖', 'DSH 插件']) {
     assert.ok(coding.description.includes(duty), `the coding template still covers ${duty}`);
   }
+  // 代码专家 runs on Codex — the whole point of the backend in this release.
+  assert.equal(expert.backend, 'codex');
+  assert.ok(expert.description.includes('真实代码仓库'), 'the expert says it works in a real repository');
+  // 代码架构师 stays on spawn, and its model is a **spec**, never an id: the
+  // real provider/model of "GPT-6.1 Sol" is not knowable from source, so writing
+  // one here would be the hard-coding the plan forbids.
+  assert.equal(architect.backend, 'spawn');
+  assert.equal(architect.model, undefined, 'the architect template must not hard-code a model id');
+  assert.equal(architect.provider, undefined, 'the architect template must not hard-code a provider id');
+  assert.equal(architect.modelSpec, 'GPT-6.1 Sol');
+  assert.equal(architect.reasoningEffort, 'high');
 });
 
 test('a template route names a model the installation actually declares', async () => {
@@ -1935,6 +2034,7 @@ test('applying a template overwrites the fields it owns and nothing else', () =>
   const result = patch(assist);
 
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    backend: 'spawn',
     key: 'assist',
     name: '律师助理',
     description: assist.description,
@@ -1967,4 +2067,236 @@ test('the create dialog offers the templates and the edit dialog does not', () =
     'the placeholder comes first, so "no template" is the initial state');
   assert.match(source, /onChange: \(event\) => applyTemplate\(event\.target\.value\)/,
     'selecting a template applies it');
+});
+
+/* -------------------------------------------------------------------------- */
+/* The execution backend, in the page                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The slice of the bundle around the create dialog's execution-backend control.
+ *
+ * Source-level by necessity, exactly like the template control: the dialog only
+ * renders while it is open, and every static tree this harness can build has it
+ * closed.
+ *
+ * @returns {string} the dialog source fragment.
+ */
+function backendControlSource() {
+  const at = SOURCE.indexOf('function SubagentDialog');
+  assert.ok(at !== -1, 'the Subagent dialog is still in the bundle');
+  // To the next section marker, not a fixed character count: a window that stops
+  // short silently drops the footer from the slice, and an assertion about the
+  // save button then fails for a reason that has nothing to do with the rule.
+  const end = SOURCE.indexOf('// ── injection preview', at);
+  assert.ok(end > at, 'the dialog is still followed by the injection-preview section');
+  const slice = SOURCE.slice(at, end);
+  assert.ok(slice.includes('disabled: busy'), 'the dialog slice must reach the footer');
+  return slice;
+}
+
+test('a Codex Subagent card names its backend instead of an empty route', async () => {
+  // The projection adds `routeLabel`, and a Codex definition stores no
+  // provider/model at all — so a card that rendered `${provider}/${model}` would
+  // read `undefined/undefined` for exactly the role the user just configured.
+  const r = await openSubagents({
+    subagents: true,
+    subagentList: [
+      {
+        id: 'sub-codex', key: 'code-expert', name: '代码专家', enabled: true,
+        description: '在真实代码仓库中完成工程任务', backend: 'codex', routeLabel: 'Codex',
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+  });
+  const route = allByClass(r.tree, 'wsp7k_subRoute');
+  assert.equal(route.length, 1);
+  assert.equal(route[0].props.children, 'Codex');
+  assert.equal(route[0].props.children.includes('undefined'), false);
+});
+
+test('a Codex card still renders on a Host that has not been restarted', async () => {
+  // The normal state of this workspace: the client bundle hot-reloads, the Host
+  // process does not. An old Host projects no `routeLabel`, so the card falls
+  // back to its own rule rather than printing `undefined/undefined`.
+  const r = await openSubagents({
+    subagents: true,
+    subagentList: [
+      {
+        id: 'sub-codex', key: 'code-expert', name: '代码专家', enabled: true,
+        description: '在真实代码仓库中完成工程任务', backend: 'codex',
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+  });
+  const route = allByClass(r.tree, 'wsp7k_subRoute');
+  assert.equal(route[0].props.children, 'Codex');
+});
+
+test('a 0.5.0 card keeps the route it always showed', async () => {
+  const r = await openSubagents({ subagents: true });
+  const routes = allByClass(r.tree, 'wsp7k_subRoute').map((el) => el.props.children);
+  assert.deepEqual(routes, ['kimi-coding/k3 · max', 'deepseek-official/deepseek-flash']);
+});
+
+test('the editor offers 执行方式 and hides the route for Codex', () => {
+  const source = backendControlSource();
+  // The control itself, with both choices.
+  assert.match(source, /t\('fBackend'\)/, 'the dialog labels the control');
+  assert.match(source, /jsx\('option', \{ key: 'spawn', value: 'spawn', children: t\('backendSpawn'\) \}\)/);
+  assert.match(source, /jsx\('option', \{ key: 'codex', value: 'codex', children: t\('backendCodex'\) \}\)/);
+  // Selecting it is a form write, like every other control.
+  assert.match(source, /onChange: \(event\) => update\(\{ backend: event\.target\.value, provider: '', model: '', reasoningEffort: '' \}\)/,
+    'switching backend clears the route it no longer describes');
+  // Hiding, not disabling: the route group is absent for Codex, and its own
+  // status block takes its place.
+  assert.match(source, /isCodex\s*\?\s*null\s*:\s*jsxs\('div', \{ className: C\.fieldStack, children: \[\s*jsx\('label', \{ className: C\.fieldStackLabel, children: t\('fRoute'\) \}\)/,
+    'the Provider / Model / Reasoning group must not render for Codex');
+  assert.match(source, /t\('codexAvailable'\)/);
+  assert.match(source, /t\('codexMissing'\)/);
+  // The route preflight is not run at all for a definition that has no route: a
+  // check that can only report a false failure must not run.
+  assert.match(source, /if \(isCodex\) \{ setRoute\(null\); return undefined; \}/);
+});
+
+test('the save button requires a route only for a DSH subagent', () => {
+  const source = backendControlSource();
+  // Read the disabled expression as one statement rather than as a formatted
+  // block: the assertion is about which terms are in it, and a whitespace-exact
+  // regex would fail on a line break while the rule stayed true.
+  const at = source.indexOf('disabled: busy');
+  assert.ok(at !== -1, 'the dialog still has a save button');
+  const expression = source.slice(at, source.indexOf('onClick', at)).replace(/\s+/g, ' ');
+  assert.ok(expression.includes("(!isCodex && (form.provider === '' || form.model === ''))"),
+    `a Codex definition has no route to fill in, so demanding one would make the dialog unsaveable — got: ${expression}`);
+  assert.ok(expression.includes("form.name.trim() === ''"));
+  assert.ok(expression.includes("form.description.trim() === ''"));
+});
+
+test('a Codex save sends no route fields at all', () => {
+  const source = backendControlSource();
+  assert.match(source, /\.\.\.\(isCodex\s*\n\s*\? \{\}\s*\n\s*: \{\s*\n\s*provider: form\.provider,/,
+    'an empty provider would look like a route the user failed to finish');
+  assert.match(source, /backend: form\.backend,/);
+  // An old definition is read as spawn and saved with an explicit value, which is
+  // the plan's "只有用户新建或者主动编辑时才保存明确的 backend".
+  assert.match(source, /backend: initial && initial\.backend === 'codex' \? 'codex' : 'spawn',/);
+});
+
+test('the architect template resolves its model from the live catalog, or says why not', () => {
+  const entry = loadBundle();
+  const patch = entry.exports.templateFormPatch;
+  const resolve = entry.exports.resolveTemplateRoute;
+  assert.equal(typeof resolve, 'function');
+
+  const catalog = {
+    available: true,
+    providers: [
+      { provider: 'openai-codex', providerName: 'OpenAI', models: [
+        { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: [{ id: 'low' }, { id: 'high' }] },
+        { id: 'gpt-6.1-mini', name: 'GPT-6.1 Mini', efforts: [{ id: 'low' }] },
+      ] },
+    ],
+  };
+  const architect = templates().find((template) => template.id === 'code-architect');
+
+  // A unique match that supports the effort: filled in.
+  assert.deepEqual(JSON.parse(JSON.stringify(resolve(catalog, 'GPT-6.1 Sol', 'high'))), {
+    ok: true, provider: 'openai-codex', model: 'gpt-6.1-sol', reasoningEffort: 'high',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(patch(architect, catalog))), {
+    backend: 'spawn', key: 'code-architect', name: '代码架构师', description: architect.description,
+    provider: 'openai-codex', model: 'gpt-6.1-sol', reasoningEffort: 'high', instructions: '',
+  });
+
+  // No catalog: nothing filled, and the reason names the missing service.
+  const noCatalog = resolve(null, 'GPT-6.1 Sol', 'high');
+  assert.equal(noCatalog.ok, false);
+  assert.equal(noCatalog.reason, 'no-catalog');
+  assert.deepEqual(JSON.parse(JSON.stringify(patch(architect, null))).provider, '');
+  assert.equal(JSON.parse(JSON.stringify(patch(architect, null))).model, '');
+
+  // A model that is not there: nothing filled, and no other GPT substituted.
+  const missing = resolve(catalog, 'GPT-7 Sol', 'high');
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, 'not-found');
+  // Two entries claiming the same display name: not guessed.
+  const twin = {
+    available: true,
+    providers: [
+      { provider: 'a', models: [{ id: 'x', name: 'GPT-6.1 Sol', efforts: [{ id: 'high' }] }] },
+      { provider: 'b', models: [{ id: 'y', name: 'GPT-6.1 Sol', efforts: [{ id: 'high' }] }] },
+    ],
+  };
+  const ambiguous = resolve(twin, 'GPT-6.1 Sol', 'high');
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.reason, 'ambiguous');
+  assert.deepEqual(JSON.parse(JSON.stringify(ambiguous.candidates)), ['a/x', 'b/y']);
+  // A match that cannot take the effort the template asks for: also not filled,
+  // because filling it would save a route its own preflight rejects.
+  const noEffort = resolve(catalog, 'GPT-6.1 Mini', 'high');
+  assert.equal(noEffort.ok, false);
+  assert.equal(noEffort.reason, 'no-effort');
+
+  // And a near miss is not a match: the comparison is the whole normalized name.
+  assert.equal(resolve(catalog, 'GPT-6.1', 'high').ok, false);
+  assert.equal(resolve(catalog, 'Sol', 'high').ok, false);
+});
+
+test('the Codex template fills no route, in either direction', () => {
+  const entry = loadBundle();
+  const expert = templates().find((template) => template.id === 'code-expert');
+  const patch = entry.exports.templateFormPatch(expert, { available: true, providers: [] });
+  assert.deepEqual(JSON.parse(JSON.stringify(patch)), {
+    backend: 'codex', key: 'code-expert', name: '代码专家', description: expert.description,
+    provider: '', model: '', reasoningEffort: '', instructions: '',
+  });
+});
+
+test('the dialog shows the Codex availability the Host reported', () => {
+  const source = backendControlSource();
+  // The verdict is read from the capability map, never inferred in the browser:
+  // only the Host can see which providers are registered.
+  assert.match(source, /const codexReady = codex && codex\.available === true;/);
+  assert.match(source, /children: codexReady && codex\.problem === null\s*\n\s*\? t\('codexAvailable'\)/,
+    'an available backend and an undetectable one are different answers');
+});
+
+test('the section passes the Codex capability into the dialog', () => {
+  const source = SOURCE.slice(SOURCE.indexOf('const workspaces = (snapshot'), SOURCE.indexOf('function SubagentCard'));
+  assert.match(source, /available: !!\(snapshot && snapshot\.capabilities && snapshot\.capabilities\.codexBackend\)/);
+  assert.match(source, /problem: \(snapshot && snapshot\.capabilities && snapshot\.capabilities\.codexBackendProblem\) \|\| null/);
+  assert.match(SOURCE, /jsx\(SubagentDialog, \{\s*\n\s*t,\s*\n\s*models,\s*\n\s*mode: dialog\.mode,\s*\n\s*initial: dialog\.subagent,\s*\n\s*validateRoute,\s*\n\s*codex,/,
+    'the dialog reads `codex`, so it has to be handed to it');
+});
+
+test('an @ mention is registered as its own source, and its picks run through /agent', () => {
+  const entry = loadBundle();
+  const { ctx, sources, events } = makeClientHarness();
+  entry.exports.apply(ctx);
+  assert.equal(sources.length, 1, 'the bundle registers exactly one trigger source');
+  assert.equal(sources[0].trigger, '@');
+  assert.equal(sources[0].name, 'workspace-subagents');
+  // The two invalidations the source cannot see for itself.
+  const onNames = events.filter((e) => e.via === 'on').map((e) => e.event);
+  const remoteNames = events.filter((e) => e.via === 'remote').map((e) => e.event);
+  assert.ok(onNames.includes('connection/reset'), 'a reconnect must repull the catalog');
+  assert.ok(remoteNames.includes('settings/document-updated'), 'a Subagent added elsewhere must show up');
+});
+
+test('the registered source can actually read, through the wiring apply gave it', async () => {
+  // The failure this catches is invisible from any other angle: constructing the
+  // source from `ctx.remote.workspaceProfile` instead of the namespace the mount
+  // callback was handed leaves it holding `undefined`, and every `@` then answers
+  // an empty menu forever, with nothing in the console.
+  const entry = loadBundle();
+  const { ctx, sources, mentionReads } = makeClientHarness();
+  entry.exports.apply(ctx);
+  const rows = await sources[0].candidates(
+    { sessionId: 's-1' },
+    { query: '', position: 'leading', signal: new AbortController().signal },
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(rows)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(mentionReads)), [{ sessionId: 's-1' }],
+    'the source must have reached the Remote namespace it was given');
 });

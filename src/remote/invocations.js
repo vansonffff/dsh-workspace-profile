@@ -61,6 +61,15 @@ export const REMOTE_INVOCATIONS = Object.freeze([
   { method: 'models', implementation: 'remoteModels', parameters: [], cancellable: true },
   /** Non-throwing route verdict for one saved definition. */
   { method: 'validateRoute', implementation: 'remoteValidateRoute', parameters: [{ name: 'args' }], cancellable: true },
+  /**
+   * The `@` mention catalog for one Session.
+   *
+   * Read-only, and deliberately tiny: the composer needs to know which experts
+   * this session's Workspace offers and how to label them, and nothing else. It
+   * is not a second `snapshot` — no stored policy, no Skill overrides, no
+   * orphaned records, no instructions probe.
+   */
+  { method: 'subagentsForSession', implementation: 'remoteSubagentsForSession', parameters: [{ name: 'args' }], cancellable: true },
   /** Profile / Perspective / onboarding write for one Workspace. */
   { method: 'savePolicy', implementation: 'remoteSavePolicy', parameters: [{ name: 'args' }] },
   /** Create or replace one Subagent definition. */

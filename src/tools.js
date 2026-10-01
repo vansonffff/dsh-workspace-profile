@@ -75,8 +75,19 @@ export function registerWorkspaceSubagentTool(ctx, { getDispatcher }) {
             summary: { type: 'string', required: true },
             key: { type: 'string', required: true },
             name: { type: 'string', required: true },
-            provider: { type: 'string', required: true },
-            model: { type: 'string', required: true },
+            /**
+             * Where the run happened.
+             *
+             * `routeLabel` is the field to read: it is `"Codex"` for a Codex
+             * Subagent and `"provider/model · effort"` for a DSH one. `provider`
+             * and `model` are therefore **optional** — a Codex definition has no
+             * DSH LLM route and stores neither, and marking them required would
+             * fail a run that succeeded.
+             */
+            backend: { type: 'string', required: true },
+            routeLabel: { type: 'string', required: true },
+            provider: { type: 'string' },
+            model: { type: 'string' },
             reasoningEffort: { type: 'string' },
             childId: { type: 'string', required: true },
             stopReason: { type: 'string', required: true },
@@ -93,16 +104,15 @@ export function registerWorkspaceSubagentTool(ctx, { getDispatcher }) {
             task: args.task,
             signal: exec.signal,
           });
-          const route = `${outcome.subagent.provider}/${outcome.subagent.model}${
-            outcome.subagent.reasoningEffort === undefined ? '' : ` · ${outcome.subagent.reasoningEffort}`
-          }`;
-          const header = `【${outcome.subagent.name}】(${route}) 已完成。\n\n`;
+          const header = `【${outcome.subagent.name}】(${outcome.subagent.routeLabel}) 已完成。\n\n`;
           return {
             summary: header + (outcome.text === '' ? '（该 Subagent 没有返回文本输出）' : outcome.text),
             key: outcome.subagent.key,
             name: outcome.subagent.name,
-            provider: outcome.subagent.provider,
-            model: outcome.subagent.model,
+            backend: outcome.subagent.backend,
+            routeLabel: outcome.subagent.routeLabel,
+            ...(outcome.subagent.provider === undefined ? {} : { provider: outcome.subagent.provider }),
+            ...(outcome.subagent.model === undefined ? {} : { model: outcome.subagent.model }),
             ...(outcome.subagent.reasoningEffort === undefined
               ? {}
               : { reasoningEffort: outcome.subagent.reasoningEffort }),

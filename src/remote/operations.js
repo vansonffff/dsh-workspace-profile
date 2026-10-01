@@ -40,11 +40,14 @@ import {
   perspectivesFor,
   recommendedSkills,
   resolveWorkspacePolicy,
+  subagentBackend,
+  subagentRouteLabel,
   validateProfilePerspective,
 } from '../policy.js';
 import { createDefinition, updateDefinition } from '../subagent-registry.js';
 import { buildSkillCatalog } from '../skill-policy.js';
 import { probeInstructions } from '../instructions-probe.js';
+import { sessionIdOf } from '../session-perspective.js';
 import { matchMatter } from '../matter-match.js';
 import {
   AGENTS_SECTION_NAME,
@@ -189,6 +192,44 @@ export function createOperations({
       }
       throw error;
     }
+  };
+
+  /**
+   * The Workspace a Session belongs to, from a Session id alone.
+   *
+   * The browser has a `sessionId` and nothing else — it holds no Agent and no
+   * registry — so "which Workspace is this session in" has to be answered here.
+   * Two sources, in order, because they answer different halves of the question:
+   *
+   * 1. **A live Agent for that Session.** When the Session is running, the Agent
+   *    is the object the Agent path itself resolves, through the resolver's own
+   *    memoized index — so the composer and the model cannot disagree about which
+   *    Workspace a session sits in.
+   * 2. **The registry's own membership list.** A retained but no-longer-running
+   *    Session has no live Agent, and the Workspace entity records the sessions
+   *    that belong to it.
+   *
+   * `undefined` means "not inside any registered Workspace", which the caller
+   * reports as such rather than as an empty list: a user whose session sits
+   * outside every Workspace needs to be told that, not shown a menu that is
+   * silently empty.
+   *
+   * @param {string} sessionId - the Session to look up.
+   * @returns {string|undefined} the owning Workspace id.
+   */
+  const workspaceIdForSession = (sessionId) => {
+    const resolver = getResolver();
+    for (const agent of liveAgents(getAgents())) {
+      if (sessionIdOf(agent) !== sessionId) continue;
+      const viaAgent = resolver.workspaceIdForAgent(agent);
+      if (viaAgent !== undefined) return viaAgent;
+    }
+    for (const workspace of resolver.list()) {
+      if (Array.isArray(workspace.sessionIds) && workspace.sessionIds.includes(sessionId)) {
+        return workspace.id;
+      }
+    }
+    return undefined;
   };
 
   /** @type {Record<string, Function>} */
@@ -505,15 +546,70 @@ export function createOperations({
     /**
      * Non-throwing verdict for one saved route.
      *
-     * @param {{ provider?: unknown, model?: unknown, reasoningEffort?: unknown }} args - the route.
+     * `backend` rides along so a Codex definition is answered by the backend rule
+     * rather than by the LLM route rule: it has no DSH route, and reporting one as
+     * "unavailable" would be a false error about a sound definition. See
+     * {@link import('../model-catalog.js').ModelCatalog#assertRoute}.
+     *
+     * @param {{ provider?: unknown, model?: unknown, reasoningEffort?: unknown, backend?: unknown }} args - the route.
      * @param {AbortSignal} [signal] - caller cancellation.
      * @returns {Promise<any>} `{ available, reason? }`.
      */
     async validateRoute(args, signal) {
       return getCatalog().routeStatus(
-        { provider: args?.provider, model: args?.model, reasoningEffort: args?.reasoningEffort },
+        {
+          provider: args?.provider,
+          model: args?.model,
+          reasoningEffort: args?.reasoningEffort,
+          backend: args?.backend,
+        },
         signal,
       );
+    },
+
+    /**
+     * The `@` mention catalog for one Session.
+     *
+     * ## Why the browser asks the Host
+     *
+     * The composer cannot work out which experts this session's Workspace offers:
+     * that answer is "session → Workspace → stored policy → enabled definitions",
+     * and only the Host holds all four. Composing it in the browser from the
+     * Settings snapshot would be wrong twice over — the snapshot is
+     * workspace-scoped and the page may be showing a different Workspace
+     * entirely, and it carries far more than the composer may see.
+     *
+     * ## What it deliberately does not return
+     *
+     * No stored policy, no Skill overrides, no orphaned records, no instructions
+     * probe, no disabled definitions. Five fields per enabled definition and the
+     * Workspace id they belong to; that is the whole payload.
+     *
+     * @param {{ sessionId?: unknown }} args - the Session to look up.
+     * @param {AbortSignal} [signal] - caller cancellation.
+     * @returns {Promise<{ available: boolean, workspaceId: string|null, subagents: any[], message?: string }>}
+     *   the mention catalog, or why there is none.
+     */
+    async subagentsForSession(args, signal) {
+      const sessionId = String(args?.sessionId ?? '');
+      if (sessionId === '') {
+        throw new WorkspaceProfileError('unknown-session', 'no Session was named in this request');
+      }
+      const workspaceId = workspaceIdForSession(sessionId);
+      if (workspaceId === undefined) {
+        return {
+          available: false,
+          workspaceId: null,
+          subagents: [],
+          message:
+            'this Session is not inside a registered Workspace, so it has no Workspace Subagents. '
+            + 'Workspace Subagents are configured per Workspace; open a session inside one to use `@`.',
+        };
+      }
+      signal?.throwIfAborted();
+      const { document } = readDocument();
+      const { policy } = resolveWorkspacePolicy(document, workspaceId, now());
+      return { available: true, workspaceId, subagents: mentionCatalog(policy) };
     },
 
     /**
@@ -937,6 +1033,18 @@ function summarizeInjection({ sections, gate }) {
 /**
  * Project a stored policy into plain JSON for the wire.
  *
+ * `backend` and `routeLabel` are added per definition so the page never has to
+ * derive "where does this agent run". A Codex definition stores no
+ * `provider`/`model` at all, and a page that rendered `${provider}/${model}` for
+ * every row would show `undefined/undefined` for exactly the rows the user just
+ * configured. `routeLabel` is the same string the model-visible directory uses
+ * ({@link import('../policy.js').subagentRouteLabel}), so the card and the prompt
+ * cannot disagree.
+ *
+ * Both extra fields are **projection only**: `updateDefinition` copies a fixed
+ * field list, so a definition round-tripped through this projection (which is
+ * what the list's toggle and edit buttons do) cannot persist them.
+ *
  * @param {any} policy - a normalized policy.
  * @returns {any} the projection.
  */
@@ -950,12 +1058,38 @@ function projectPolicy(policy) {
     perspectiveLabel: PERSPECTIVE_LABELS[policy.defaultPerspective] ?? policy.defaultPerspective,
     skillOverrides: { ...policy.skillOverrides },
     subagents: Object.values(policy.subagents ?? {})
-      .map((definition) => ({ ...definition }))
+      .map((definition) => ({
+        ...definition,
+        backend: subagentBackend(definition),
+        routeLabel: subagentRouteLabel(definition),
+      }))
       .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     enabledSubagentKeys: subagents.map((definition) => definition.key),
     createdAt: policy.createdAt,
     updatedAt: policy.updatedAt,
   };
+}
+
+/**
+ * The five fields the `@` menu needs, for every enabled definition.
+ *
+ * Enabled only, and that is the whole rule: a disabled agent is not merely
+ * refused, it is invisible — the same rule `enabledSubagents` enforces for the
+ * model-visible directory. The selection is the same function, so the composer
+ * cannot offer an expert the model was never told about.
+ *
+ * @param {any} policy - a resolved Workspace policy.
+ * @returns {Array<{ key: string, name: string, description: string, backend: string, routeLabel: string }>}
+ *   the mention rows, key-sorted.
+ */
+function mentionCatalog(policy) {
+  return enabledSubagents(policy).map((definition) => ({
+    key: definition.key,
+    name: definition.name,
+    description: definition.description,
+    backend: subagentBackend(definition),
+    routeLabel: subagentRouteLabel(definition),
+  }));
 }
 
 /** Build a `set` path op. */
@@ -991,4 +1125,4 @@ function messageOf(error) {
   return String(error);
 }
 
-export { projectPolicy, isValidSubagentKey, defaultKeyFor };
+export { projectPolicy, mentionCatalog, isValidSubagentKey, defaultKeyFor };

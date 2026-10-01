@@ -22,12 +22,15 @@ import {
   findDuplicateKey,
   findSubagent,
   isSkillEnabled,
+  isValidSubagentBackend,
   isValidSubagentKey,
   normalizeDocument,
   normalizeWorkspacePolicy,
   perspectivesFor,
   recommendedSkills,
   resolveWorkspacePolicy,
+  subagentBackend,
+  subagentRouteLabel,
   validateProfilePerspective,
   validateSubagentDefinition,
   validateSubagentEdit,
@@ -357,3 +360,64 @@ function makeDefinition(overrides = {}) {
     ...overrides,
   };
 }
+
+/* -------------------------------------------------------------------------- */
+/* The execution backend                                                       */
+/* -------------------------------------------------------------------------- */
+
+test('a definition with no backend at all is spawn, and nothing else', () => {
+  // The compatibility red line, at the data-model level. Every record written by
+  // 0.5.0 and earlier lacks the field, and the only honest reading of an absent
+  // field is the behaviour those records actually had.
+  assert.equal(subagentBackend(undefined), 'spawn');
+  assert.equal(subagentBackend({}), 'spawn');
+  assert.equal(subagentBackend({ backend: 'spawn' }), 'spawn');
+  assert.equal(subagentBackend({ backend: 'codex' }), 'codex');
+  // A value from a newer build is read as the transport this build understands
+  // rather than guessed at — and it can never be *stored*, which is what the
+  // validation test below pins.
+  assert.equal(subagentBackend({ backend: 'acp' }), 'spawn');
+  assert.equal(subagentBackend(null), 'spawn');
+});
+
+test('only the two declared backends may be stored', () => {
+  assert.equal(isValidSubagentBackend(undefined), true, 'a write that says nothing keeps what was there');
+  assert.equal(isValidSubagentBackend('spawn'), true);
+  assert.equal(isValidSubagentBackend('codex'), true);
+  for (const bad of ['acp', 'fork', 'sdk', 'Codex', '', null, 42]) {
+    assert.equal(isValidSubagentBackend(bad), false, `${JSON.stringify(bad)} must not be storable`);
+  }
+});
+
+test('a spawn definition needs a route and a codex definition must not have one', () => {
+  const spawn = makeDefinition({ backend: 'spawn' });
+  assert.deepEqual(validateSubagentDefinition(spawn), []);
+  // The pre-0.6.0 record is still valid: the absent field is spawn.
+  assert.deepEqual(validateSubagentDefinition(makeDefinition()), []);
+
+  const noRoute = validateSubagentDefinition(makeDefinition({ provider: '', model: '' }));
+  assert.ok(noRoute.some((problem) => problem.includes('provider is required for a DSH-subagent backend')));
+  assert.ok(noRoute.some((problem) => problem.includes('model is required for a DSH-subagent backend')));
+
+  // Codex is the case the split exists for: those are DSH LLM route fields, and
+  // a Codex child's model comes from Codex's own configuration.
+  const codex = validateSubagentDefinition({
+    id: 'b', key: 'code-expert', name: '代码专家', description: '在真实仓库中完成工程任务',
+    backend: 'codex', enabled: true,
+  });
+  assert.deepEqual(codex, []);
+
+  const unknownBackend = validateSubagentDefinition(makeDefinition({ backend: 'acp' }));
+  assert.ok(unknownBackend.some((problem) => problem.includes('backend, when present, must be one of spawn, codex')));
+});
+
+test('the route label answers "where does this run" for both backends', () => {
+  assert.equal(subagentRouteLabel(makeDefinition({ backend: 'spawn' })), 'kimi-coding/k3');
+  assert.equal(subagentRouteLabel(makeDefinition({ backend: 'spawn', reasoningEffort: 'high' })), 'kimi-coding/k3 · high');
+  // Not "undefined/undefined" and not an empty string: a Codex definition
+  // legitimately stores no route, and the label has to say what it *is*.
+  assert.equal(subagentRouteLabel({ key: 'x', name: 'x', backend: 'codex' }), 'Codex');
+  assert.equal(subagentRouteLabel({ key: 'x', name: 'x', backend: 'codex', provider: '', model: '' }), 'Codex');
+  // And a pre-0.6.0 record still reads as its own route.
+  assert.equal(subagentRouteLabel(makeDefinition()), 'kimi-coding/k3');
+});

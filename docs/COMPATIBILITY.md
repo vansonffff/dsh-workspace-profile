@@ -78,6 +78,11 @@ where to look first if that changes.
 | 11 | Model route preflight | ✅ **with one added gate** | `llm.resolveCallConfig` + our `listModels` membership gate |
 | 12 | `/agent` command registration | ✅ | `ctx.commands.register({ … })` |
 | 13 | Browser Settings section | ✅ | `settings.section` slot + `remote.$mount` |
+| 14 | `@`-trigger source registration (0.6.0) | ✅ | `ctx.inputTriggers.registerSource({ trigger: '@', … })` — see §9 |
+| 15 | Claiming a typed line from a trigger source (0.6.0) | ⚠️ **space, not enter** | `matchSpace` is called for `@`; `matchEnter` is not (the composer adjudicates `/` only) |
+| 16 | Running a command from the browser (0.6.0) | ✅ | `ctx.remote.commands.execute(sessionId, line, attachments)` → `{ ok, value }` |
+| 17 | Settings-change notification for a client cache (0.6.0) | ✅ | forwarded host event `settings/document-updated(ns, revision)` via `ctx.remote.$on` |
+| 18 | Connection reset notification (0.6.0) | ✅ | `ctx.on('connection/reset', …)` — the platform's own "repull wire-derived caches" signal |
 
 Legend: ✅ holds as assumed · ⚠️ holds with a documented limit · **changed
 mechanism** means the plan's assumed API does not exist and the design moved.
@@ -329,6 +334,66 @@ inheritsParentContext: false
 exists: the child sees **zero** parent context, so an assignment that only makes
 sense with the conversation in view produces a confident answer to the wrong
 question.
+
+### An out-of-process backend advertises **no** start capabilities (0.6.0, measured)
+
+```js
+// dsh-subagent/lib/index.js, at the NO_START_CAPABILITIES constant
+/**
+ * The capability advertisement of an out-of-process backend: NONE. A child in
+ * another process cannot honor parent-enforced start features
+ * (`agentOptions`/`outputSchema`/`maxDepth`/`toolFilter`/`persona`), so the service rejects a
+ * request needing any of them before `start` runs — never accepted-then-ignored.
+ */
+```
+
+The rejection is real, not advisory — `SubagentRuntime.assertCapabilities` throws
+`SubagentError(… "does not support the \"<cap>\" capability", "UNSUPPORTED_CAPABILITY")`
+before the provider is called. This is why 0.6.0 has **two** request builders rather
+than one payload sent to two names: `buildSpawnRequest()` supplies all five,
+`buildCodexRequest()` supplies none and asserts their absence by key.
+
+**The Codex provider package is not installed here, in either distribution:**
+
+| Distribution | `@deepseek-ai/dsh-subagent-codex` |
+|---|---|
+| desktop `app.asar` (13,973 files) | absent — `dsh-subagent`, `-spawn-in-process`, `-fork-in-process`, `-in-process-driver` are present |
+| `~/.npm-global/…/dsh` `0.1.7-rc.2` | absent |
+
+So the registration **name** is not knowable from this machine, and the plugin does
+not guess it: it asks `ctx.subagents.getProvider('codex')`, then accepts the unique
+registered name matching `/^codex$/i`, and otherwise fails with
+`codex-backend-unavailable` listing what *is* registered. Two names matching is
+`ambiguous-codex-backend`. Nothing falls back to `spawn`.
+
+A provider lookup that misses is equally explicit in the seam itself —
+`SubagentRuntime.expectProvider` throws `SubagentError('no subagent provider
+registered for "<name>"', 'NO_PROVIDER')` — so a wrong name fails loudly at `start`
+rather than silently doing nothing.
+
+### `@`-trigger hooks (0.6.0, read from the installed platform source)
+
+Two facts the `@子代理` source is built on, both verified in
+`dsh-client-ui-input-trigger/lib/client.js` and
+`dsh-client-ui-conversation/lib/client.js` rather than assumed:
+
+1. **`onSpace()` polls every source registered for the hit's trigger char**, with no
+   trigger filter, after checking `hit.position === 'leading'` itself. Nothing else
+   on `@` implements `matchSpace` (`ui-reference` implements neither `matchSpace`
+   nor `matchEnter` nor `lexicon`; `ui-commands` implements `matchSpace` for `/`
+   only), so the claim has a single possible author.
+2. **`SubmitMachine.onEnter` adjudicates only `/`-leading drafts.** A draft starting
+   with `@` is sent as an ordinary message, so `matchEnter` is never reached for the
+   typed `@name <task>` form — the space keystroke is what claims it. `matchEnter` is
+   implemented anyway, because the controller's `adjudicate` does iterate `@` sources
+   when it is called.
+
+The menu group heading is `t(source.name)`, resolved in the `slash.menu` namespace,
+which belongs to `ui-input-trigger` — `locale.register` throws when a namespace
+already has a language, so a second package cannot add a key to it. The reader-facing
+heading therefore travels on each candidate's `section` field, which is the
+platform's own mechanism for it (`MenuView`: a group whose items carry `section` omits
+the source-title row).
 
 ### The lifecycle, and why disposal is asserted everywhere
 

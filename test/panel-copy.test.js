@@ -25,6 +25,22 @@ import test from 'node:test';
 const CJK = /[\u3400-\u9fff]/;
 
 /**
+ * Labels that legitimately contain no Chinese, each with the reason.
+ *
+ * The rule this file enforces is "no Chinese label is left as **bare English
+ * copy**" — a control whose label a Chinese reader has to translate before they
+ * can decide what it does. A product name is not that: there is no Chinese word
+ * for it, translating it would make the label unsearchable, and the plan names
+ * the option literally. Kept as an explicit list rather than a heuristic, so a
+ * second entry is a visible decision instead of an accident.
+ */
+const PROPER_NOUNS = new Set([
+  // One of the two 执行方式 choices. The plan spells them 「DSH 子代理」/「Codex」,
+  // and "Codex" is the official product's name.
+  'backendCodex',
+]);
+
+/**
  * Read the two dictionaries out of the bundle source.
  *
  * The bundle is a classic script that registers itself with `__ModuleLoader__`, and
@@ -37,6 +53,13 @@ const CJK = /[\u3400-\u9fff]/;
  * `role` and `type` out of unrelated object literals further down, which reported a
  * key-parity failure that did not exist. Single-quoted strings are skipped, so a
  * brace inside a label cannot end a slice early.
+ *
+ * **Line comments are skipped too, and that is not cosmetic.** A `'` in a `//`
+ * comment used to flip the double into "inside a string" — and an apostrophe in an
+ * English comment ("the group's heading") then swallowed the rest of the block. The
+ * symptom was a false report about *every* Chinese label, which points at the
+ * dictionary rather than at the slice: a walker that is stricter than the runtime
+ * about comments is a walker that invents failures.
  *
  * @returns {{ zh: Record<string, string>, en: Record<string, string> }} both bundles.
  */
@@ -64,6 +87,12 @@ function dictionaries() {
         else if (char === "'") quote = false;
         continue;
       }
+      if (char === '/' && source[index + 1] === '/') {
+        const newline = source.indexOf('\n', index);
+        if (newline === -1) break;
+        index = newline;
+        continue;
+      }
       if (char === "'") quote = true;
       else if (char === '{') depth += 1;
       else if (char === '}') {
@@ -87,12 +116,25 @@ function dictionaries() {
 test('no Chinese label is left as bare English', () => {
   const { zh } = dictionaries();
   assert.ok(Object.keys(zh).length > 100, 'the Chinese bundle was not read');
-  const bare = Object.entries(zh).filter(([, value]) => !CJK.test(value));
+  const bare = Object.entries(zh)
+    .filter(([key]) => !PROPER_NOUNS.has(key))
+    .filter(([, value]) => !CJK.test(value));
   assert.deepEqual(
     bare,
     [],
     `these Chinese labels have no Chinese in them:\n  ${bare.map(([key, value]) => `${key} = ${value}`).join('\n  ')}`,
   );
+});
+
+test('the proper-noun list stays a short, live list', () => {
+  // An allowlist entry that no longer exists is a rule that quietly stopped
+  // applying; one that covers something the dictionary never had would make the
+  // guard above pass for a label nobody wrote.
+  const { zh } = dictionaries();
+  for (const key of PROPER_NOUNS) {
+    assert.ok(key in zh, `${key} is exempted from the Chinese-label rule but is not a key in the bundle`);
+    assert.equal(CJK.test(zh[key]), false, `${key} is exempted but now has a Chinese label; drop the exemption`);
+  }
 });
 
 test('the two bundles carry exactly the same keys', () => {

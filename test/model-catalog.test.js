@@ -206,3 +206,35 @@ test('the catalog carries effort lists and context windows, and caches', async (
   catalog.invalidate();
   assert.notEqual(await catalog.catalog(), first);
 });
+
+/* -------------------------------------------------------------------------- */
+/* The Codex backend is not an LLM route                                       */
+/* -------------------------------------------------------------------------- */
+
+test('a Codex definition is not run through the LLM route preflight', async () => {
+  // The false error this prevents: a Codex definition stores no provider and no
+  // model, so the shape check would report "no complete model route" for a
+  // definition the Host itself considers well-formed.
+  const catalog = new ModelCatalog({ getLlm: () => undefined });
+  const detail = await catalog.assertRoute({ backend: 'codex' });
+  assert.deepEqual(detail, { backend: 'codex' });
+  // Not even the `llm` service is required on this path: a deployment that
+  // mounts the Codex backend and no model adapter can still dispatch Codex.
+  const verdict = await catalog.routeStatus({ backend: 'codex' });
+  assert.equal(verdict.available, true);
+  assert.equal(verdict.backend, 'codex');
+});
+
+test('a route without a backend is still a spawn route, and still validated', async () => {
+  // The Remote's `validateRoute` passes the four route fields; only a definition
+  // carries a backend. Absent must stay "ordinary route", never "skip the check".
+  const catalog = new ModelCatalog({ getLlm: () => undefined });
+  await assert.rejects(
+    () => catalog.assertRoute({ provider: 'kimi-coding', model: 'k3' }),
+    MissingCapabilityError,
+  );
+  await assert.rejects(
+    () => catalog.assertRoute({ provider: '', model: '' }),
+    UnresolvableRouteError,
+  );
+});

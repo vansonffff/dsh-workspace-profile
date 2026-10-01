@@ -64,7 +64,7 @@ Workspace:
 | **Profile** | the professional domain — General, Litigation, Bankruptcy |
 | **Perspective** | the position this work is done from — e.g. 原告代理人 / 被告代理人 under Litigation, 管理人 / 债务人 / 投资人 under Bankruptcy |
 | **Skill policy** | which Skills agents in this Workspace may use: 推荐 / 可用 / 禁用 |
-| **Workspace Subagent** | a reusable definition: who does what class of subtask, with which model |
+| **Workspace Subagent** | a reusable definition: who does what class of subtask, with which model — on the DSH `spawn` backend or on the official Codex backend |
 | **Matter** | the CaseBench case this Workspace *is* — read from `matter.yaml`, compared with the Profile and Perspective, never written to |
 
 A Profile is a body of reviewable Markdown, not a label. A Perspective is a
@@ -140,14 +140,55 @@ A person can call the same dispatcher directly:
 Both go through one lifecycle, so the route preflight, the depth cap, cancellation
 and disposal cannot drift apart between them.
 
+**A third: `@子代理`.** Type `@` at the start of a message and the Workspace's
+experts appear in the composer's own menu — the plugin registers a trigger source,
+it does not fork the composer:
+
+```
+@码农 修一下这里的类型错误
+@code-expert 修复 KDocs Sidebar 白屏并运行测试
+@code-architect 审查一下当前插件架构
+```
+
+Only the current Workspace's enabled experts are listed, and both the display name
+and the key are searchable, so `@码农` and `@coding` reach the same agent. A leading
+token only: `请让 @代码专家 看看` is prose about an agent, not a dispatch. And if two
+experts share a display name, nothing is guessed — the notice names the keys to use
+instead.
+
+Every `@` ends in the same place as `/agent`: as a `CommandClaim` that submits
+`/agent <key> <task>`. The plugin adds selection, not a second execution path.
+
+**Two execution backends.** `执行方式` in the editor chooses between them:
+
+| | DSH 子代理 (`spawn`) | Codex (`codex`) |
+|---|---|---|
+| Runs | an in-process DSH child | the official Codex backend |
+| Model | this deployment's model route — Provider / Model / Reasoning, preflighted live | follows the Codex configuration; this plugin neither reads nor writes it |
+| Receives | persona, route, depth cap | the assignment alone |
+
+The split is not cosmetic. An out-of-process backend advertises no *start
+capabilities*, and the subagent seam **rejects** a request carrying `agentOptions`,
+`persona`, `maxDepth`, `toolFilter` or `outputSchema` rather than ignoring it — so
+the two backends get two different request bodies, and the role identity a `spawn`
+child receives as a persona is compiled into a Codex child's assignment instead.
+
+**Codex is not a dependency.** The plugin detects a registered Codex provider in the
+live `ctx.subagents` registry and says `Codex 后端可用` or `Codex 后端未安装` in the dialog.
+When there is none, a saved Codex Subagent fails with a named error. It never
+installs the package, never silently falls back to `spawn`, and never substitutes a
+model.
+
 **Templates when creating one.** 添加子 Agent opens with a **模板** dropdown
 holding a few factory presets:
 
-| Template | Key | Route |
+| Template | Key | Execution |
 |---|---|---|
 | 独立评审员 | `reviewer` | `kimi-coding/k3` · max |
 | 律师助理 | `assist` | `deepseek-official/deepseek-flash` · max |
 | 码农 | `coding` | `deepseek-official/deepseek-flash` · max |
+| 代码专家 | `code-expert` | Codex — follows the Codex configuration |
+| 代码架构师 | `code-architect` | GPT-6.1 Sol · high, resolved from the live catalogue |
 
 Picking one fills name, key, description, route and guidance; nothing is saved until you press 创建,
 and every field stays editable. A template is a *starting point*, so it carries no
@@ -156,6 +197,12 @@ an edit of the same Subagent) and no `enabled` (whether an agent starts enabled 
 your answer, not a preset's). The route it suggests is preflighted live in the same
 dialog: if that model is not available in this deployment, the dialog says so rather
 than silently substituting one.
+
+The architect's model is deliberately **not** written down. The template names it the
+way the plan spells it and resolves the real `provider`/`model` from the live
+catalogue when applied — and only when exactly one entry matches **and** it offers
+`high`. No unique match fills nothing: no fallback to another GPT, no quiet
+substitution, and the dialog names which of the four reasons applied.
 
 They live in `client.js` rather than the host half on purpose: a template is
 pre-fill material — nothing to persist, nothing to sync across machines — and its
@@ -247,6 +294,13 @@ transport error. Restart DSH and reopen the page.
   under a Workspace that has since become Litigation is dropped, not translated.
 - It never substitutes the parent session's model for a Subagent's own route.
   A Subagent with no usable route fails loudly instead.
+- It never substitutes an execution backend either. A Codex Subagent on a
+  deployment with no Codex provider fails with the reason; it does not quietly run
+  on `spawn`, does not pick another model, and does not install anything.
+- It never guesses which expert a name meant. Two enabled Subagents may share a
+  display name; `@名称` then refuses and names the keys, while `@key` still works.
+- It never treats a mention in the middle of a sentence as a dispatch. Only a
+  leading `@` is a direct call; inline is prose.
 - It never installs a Skill. A recommended Skill that is not present shows as
   未安装 and is never written as enabled.
 - It never recommends a Skill you disabled, and never disables one to satisfy a
@@ -303,16 +357,17 @@ src/                 host half
   matter-match.js      Matter type/role → Profile/Perspective, and the verdicts
   skill-policy.js      per-Agent Skill shadows
   model-catalog.js     route catalogue and preflight
-  subagent-registry.js definitions, persona and dispatch-prompt compilers
-  subagent-dispatch.js the one lifecycle
+  subagent-registry.js definitions, the backend model, and the three prompt compilers
+  subagent-dispatch.js the one lifecycle, and the two backends' request shapes
   tools.js commands.js the entry points (`workspace_subagent`, `/agent`, `/perspective`)
   remote/              the business operations behind the browser surface
-client.js            the Settings section (classic script, no bundler)
+client.js            the Settings section, and the `@子代理` trigger source
+                       (classic script, no bundler)
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition, plus
                        matter-probe.mjs and matter-yaml-golden.py for the Matter reader
-test/                250 tests, and fixtures/ holding the PyYAML golden pair
-docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3 · 0.4 · 0.5
+test/                319 tests, and fixtures/ holding the PyYAML golden pair
+docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3 · 0.4 · 0.5 · 0.6 · PLAN-0.6
 ```
 
 ## Requirements
@@ -339,7 +394,8 @@ loudly on any it cannot find, so it cannot paper over a dependency that was neve
 declared. Then:
 
 ```bash
-node --test "test/*.test.js"                             # 230 tests
+node --test "test/*.test.js"                             # 319 tests
+RELEASE_CHECK=1 node --test "test/*.test.js"             # the release gate: nothing skipped
 ```
 
 Probes that need a real booted composition. They each **require** an explicit
@@ -400,10 +456,16 @@ node scripts/matter-yaml-golden.py       # needs Python + PyYAML; see --help
 - [`docs/MILESTONE-0.5.md`](docs/MILESTONE-0.5.md) — the Matter of a multi-directory
   Workspace: why every real Workspace reported none, the `ctx.workspaceDirs` seam,
   and what is verified versus still owed.
+- [`docs/MILESTONE-0.6.md`](docs/MILESTONE-0.6.md) — the Codex backend and `@子代理`:
+  the compatibility red line, the two places the platform disagrees with the plan,
+  the write-path bug this round found, the negative-control table, and what is
+  deliberately unverified.
+- [`docs/PLAN-0.6.md`](docs/PLAN-0.6.md) — the plan 0.6.0 was built against,
+  reproduced verbatim as the acceptance baseline.
 
 ## Release
 
-Current version: **0.5.0** (`package.json` is the single source of truth). What
+Current version: **0.6.0** (`package.json` is the single source of truth). What
 changed in each release, and what was deliberately not done, is in
 [`CHANGELOG.md`](CHANGELOG.md); tagged releases are on
 [GitHub](https://github.com/vansonffff/dsh-workspace-profile/releases).

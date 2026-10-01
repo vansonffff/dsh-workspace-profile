@@ -31,6 +31,7 @@ export function buildClientDescriptors(schema) {
     { method: 'matter', implementation: 'remoteMatter', parameters: [{ name: 'args' }], cancellable: true },
     { method: 'models', implementation: 'remoteModels', parameters: [], cancellable: true },
     { method: 'validateRoute', implementation: 'remoteValidateRoute', parameters: [{ name: 'args' }], cancellable: true },
+    { method: 'subagentsForSession', implementation: 'remoteSubagentsForSession', parameters: [{ name: 'args' }], cancellable: true },
     { method: 'savePolicy', implementation: 'remoteSavePolicy', parameters: [{ name: 'args' }] },
     { method: 'putSubagent', implementation: 'remotePutSubagent', parameters: [{ name: 'args' }] },
     { method: 'duplicateSubagent', implementation: 'remoteDuplicateSubagent', parameters: [{ name: 'args' }] },

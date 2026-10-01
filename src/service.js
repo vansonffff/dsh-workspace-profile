@@ -99,6 +99,15 @@ export class WorkspaceProfileService extends TypertRemoteService {
   }
 
   /**
+   * @param {any} args - `{ sessionId }`.
+   * @param {AbortSignal} signal - caller cancellation.
+   * @returns {Promise<any>} the `@` mention catalog for that Session.
+   */
+  remoteSubagentsForSession(args, signal) {
+    return this.subagentsForSession(args, signal);
+  }
+
+  /**
    * @param {any} args - `{ workspaceId, expectedRevision, patch }`.
    * @returns {Promise<any>} the write outcome.
    */

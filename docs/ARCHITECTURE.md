@@ -102,16 +102,33 @@ from the next Agent step" is a consequence of computing the text at assembly tim
 ### A delegation
 
 ```
-workspace_subagent | /agent
+workspace_subagent | /agent | @子代理
         └─→ SubagentDispatcher.dispatch
               resolve Workspace → read policy → find enabled definition
-              → catalog.assertRoute(...)         ← before any child resource
-              → compile persona + assignment
-              → ctx.subagents.start('spawn', { agentOptions, persona, maxDepth: 3 })
+              → backend = definition.backend (absent reads as 'spawn')
+              ┌ spawn ──────────────────────────────────────────────┐
+              │  catalog.assertRoute(...)   ← before any child      │
+              │  compilePersona + compileSpawnTask                  │
+              │  → start('spawn', buildSpawnRequest(...))           │
+              │      { agentOptions, persona, maxDepth: 3 }         │
+              └─────────────────────────────────────────────────────┘
+              ┌ codex ──────────────────────────────────────────────┐
+              │  resolveCodexProvider(ctx.subagents) ← no route     │
+              │    preflight: a Codex child has no DSH LLM route    │
+              │  compileCodexTask (identity compiled INTO the text) │
+              │  → start(<registered name>, buildCodexRequest(...)) │
+              │      { label, prompt, parent, signal }  ← and the   │
+              │      five start capabilities are asserted absent    │
+              └─────────────────────────────────────────────────────┘
               → await run.result   ┐ both caught separately
               → await run.dispose()┘ so neither erases the other
               → interpret stopReason → text
 ```
+
+The three entry points converge on `dispatch`, and `@子代理` adds no execution path
+of its own: the trigger source builds a `CommandClaim` that submits
+`/agent <key> <task>`, so a mention is a *selection* mechanism in front of the same
+lifecycle.
 
 ### Reading a Matter
 

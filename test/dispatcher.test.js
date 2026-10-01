@@ -12,8 +12,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { SubagentDispatcher, SUBAGENT_MAX_DEPTH, SUBAGENT_PROVIDER } from '../src/subagent-dispatch.js';
+import { SubagentDispatcher, SUBAGENT_MAX_DEPTH, SUBAGENT_PROVIDER, buildCodexRequest, buildSpawnRequest, resolveCodexProvider } from '../src/subagent-dispatch.js';
 import {
+  AmbiguousCodexBackendError,
+  CodexBackendUnavailableError,
   NoWorkspaceContextError,
   SubagentRunFailedError,
   UnknownSubagentError,
@@ -68,9 +70,19 @@ function makeDispatcher(spec = {}) {
       return { provider: route.provider, model: route.model };
     },
   };
+  /**
+   * The registered providers.
+   *
+   * Modelled as a *table*, exactly as the seam is: `getProvider(name)` answers
+   * only for a name that is registered, and `list()` is the same set. `spawn` is
+   * in it by default because that is what this deployment has; `codex` is added
+   * only by the tests that say so — which is also the whole point of the Codex
+   * path, since the official package is not installed here.
+   */
+  const providers = spec.providers ?? (spec.noProvider === true ? [] : [SUBAGENT_PROVIDER]);
   const subagents = spec.noSubagents === true ? undefined : {
-    list: () => (spec.noProvider === true ? [] : [SUBAGENT_PROVIDER]),
-    getProvider: (name) => (spec.noProvider === true || name !== SUBAGENT_PROVIDER ? undefined : { name: SUBAGENT_PROVIDER }),
+    list: () => [...providers],
+    getProvider: (name) => (providers.includes(name) ? { name } : undefined),
     start: async (name, request) => {
       calls.start.push({ name, request });
       if (spec.startFails === true) throw new Error('provider refused to start');
@@ -307,4 +319,213 @@ test('a broken session-stance lookup costs the child its override, not its stanc
   dispatcher.getSessionPerspective = () => { throw new Error('storage exploded'); };
   await dispatcher.dispatch({ agent, reference: '案例检索员', task: 't' });
   assert.ok(calls.start[0].request.prompt[0].text.includes('工作立场：管理人 (Administrator)'));
+});
+
+/* -------------------------------------------------------------------------- */
+/* Backends                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** The 0.5.0 shape: no `backend` field at all. */
+const LEGACY_DEFINITION = {
+  id: 'legacy',
+  key: 'case-researcher',
+  name: '案例检索员',
+  description: '检索并核验与当前工作区相关的法律规则和案例',
+  provider: 'kimi-coding',
+  model: 'k3',
+  reasoningEffort: 'high',
+  enabled: true,
+  createdAt: NOW_ISO,
+  updatedAt: NOW_ISO,
+};
+
+/** The 0.6.0 Codex role: no provider, no model, no effort. */
+const CODEX_DEFINITION = {
+  id: 'codex',
+  key: 'code-expert',
+  name: '代码专家',
+  description: '在真实代码仓库中完成工程任务',
+  backend: 'codex',
+  enabled: true,
+  createdAt: NOW_ISO,
+  updatedAt: NOW_ISO,
+};
+
+/** The 0.6.0 spawn role the plan pins to a specific model and effort. */
+const ARCHITECT_DEFINITION = {
+  id: 'architect',
+  key: 'code-architect',
+  name: '代码架构师',
+  description: '以分析、设计和审查为主',
+  backend: 'spawn',
+  provider: 'openai-codex',
+  model: 'gpt-6.1-sol',
+  reasoningEffort: 'high',
+  enabled: true,
+  createdAt: NOW_ISO,
+  updatedAt: NOW_ISO,
+};
+
+test('a definition stored before 0.6.0 still runs on spawn, unchanged', async () => {
+  // The compatibility red line. `backend === undefined` is not "unknown"; it is
+  // what every 0.5.0 definition carries, and it means exactly what it did.
+  const { dispatcher, agent, calls } = makeDispatcher({ subagents: { legacy: LEGACY_DEFINITION } });
+  const outcome = await dispatcher.dispatch({ agent, reference: 'case-researcher', task: 't' });
+  assert.equal(calls.start[0].name, SUBAGENT_PROVIDER);
+  assert.deepEqual(calls.start[0].request.agentOptions, {
+    provider: 'kimi-coding', model: 'k3', reasoningEffort: 'high',
+  });
+  assert.equal(outcome.subagent.backend, 'spawn');
+  assert.equal(outcome.subagent.routeLabel, 'kimi-coding/k3 · high');
+  // No migration happened anywhere: the definition is handed back as stored.
+  assert.equal('backend' in LEGACY_DEFINITION, false, 'the test fixture must stay a pre-0.6.0 record');
+});
+
+test('the coding template keeps its 0.5.0 behaviour: spawn on DeepSeek', async () => {
+  // The plan calls this out as the one regression test 0.6.0 must have. 码农 is
+  // not a legacy alias for the Codex role — it is a first-class engineering role
+  // that keeps the exact route it was configured with.
+  const coding = {
+    id: 'coding-id', key: 'coding', name: '码农',
+    description: '阅读并分析代码仓库；定位、复现并修复 Bug',
+    backend: 'spawn', provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max',
+    enabled: true, createdAt: NOW_ISO, updatedAt: NOW_ISO,
+  };
+  const { dispatcher, agent, calls } = makeDispatcher({ subagents: { c: coding } });
+  const outcome = await dispatcher.dispatch({ agent, reference: 'coding', task: '改一个类型错误' });
+  assert.equal(calls.start[0].name, SUBAGENT_PROVIDER);
+  assert.deepEqual(calls.start[0].request.agentOptions, {
+    provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max',
+  });
+  assert.equal(outcome.subagent.routeLabel, 'deepseek-official/deepseek-flash · max');
+});
+
+test('a Codex definition starts the codex provider and sends it no DSH start capability', async () => {
+  const { dispatcher, agent, calls } = makeDispatcher({
+    subagents: { c: CODEX_DEFINITION },
+    providers: [SUBAGENT_PROVIDER, 'codex'],
+  });
+  const outcome = await dispatcher.dispatch({ agent, reference: 'code-expert', task: '修 KDocs Sidebar 白屏' });
+
+  assert.equal(calls.start.length, 1);
+  assert.equal(calls.start[0].name, 'codex');
+  const { request } = calls.start[0];
+  // The out-of-process backend advertises NO start capabilities, and the seam
+  // rejects a request that asks for one rather than ignoring it. Each of these
+  // would be a loud failure at `start`, so each is asserted absent by name.
+  for (const forbidden of ['agentOptions', 'persona', 'maxDepth', 'toolFilter', 'outputSchema']) {
+    assert.equal(forbidden in request, false, `the Codex request must not carry ${forbidden}`);
+  }
+  assert.equal(request.parent, agent);
+  assert.equal(request.label, '代码专家');
+  // The identity still reaches the child — compiled into the assignment, which
+  // is the only channel this backend has.
+  const prompt = request.prompt[0].text;
+  assert.ok(prompt.includes('角色：代码专家'));
+  assert.ok(prompt.includes('修 KDocs Sidebar 白屏'));
+  assert.equal(outcome.subagent.backend, 'codex');
+  assert.equal(outcome.subagent.routeLabel, 'Codex');
+  assert.equal(outcome.subagent.provider, undefined, 'a Codex run reports no DSH provider');
+  assert.equal(outcome.subagent.model, undefined, 'and no DSH model');
+});
+
+test('a Codex definition never goes through the LLM route preflight', async () => {
+  // It has no DSH route to check, and asking the catalog would report "no
+  // complete model route" for a definition the Host itself considers valid.
+  const { dispatcher, agent, calls } = makeDispatcher({
+    subagents: { c: CODEX_DEFINITION },
+    providers: ['codex'],
+  });
+  await dispatcher.dispatch({ agent, reference: 'code-expert', task: 't' });
+  assert.deepEqual(calls.routeChecks, [], 'the Codex path must not consult the model catalog');
+  assert.equal(calls.start[0].name, 'codex');
+});
+
+test('a missing Codex backend is refused by name, and nothing is substituted', async () => {
+  // This is the case this machine can actually reproduce: the official Codex
+  // provider package is not installed in either distribution here.
+  const { dispatcher, agent, calls } = makeDispatcher({ subagents: { c: CODEX_DEFINITION } });
+  await assert.rejects(
+    () => dispatcher.dispatch({ agent, reference: 'code-expert', task: 't' }),
+    (error) => {
+      assert.ok(error instanceof CodexBackendUnavailableError, `got ${error && error.code}`);
+      assert.equal(error.code, 'codex-backend-unavailable');
+      assert.ok(error.message.includes('code-expert'), 'the error names the Subagent');
+      assert.ok(error.message.includes('spawn'), 'and says the fallback is refused in as many words');
+      assert.ok(error.message.includes('never falls back'), error.message);
+      assert.deepEqual(error.details.registered, ['spawn'], 'it reports what IS registered');
+      return true;
+    },
+  );
+  assert.equal(calls.start.length, 0, 'no run may be started on another backend');
+});
+
+test('the Codex provider is detected from the live provider table, never assumed', () => {
+  assert.equal(resolveCodexProvider({ list: () => [], getProvider: () => undefined }), undefined);
+  assert.equal(resolveCodexProvider({ list: () => ['spawn', 'fork'], getProvider: () => undefined }), undefined);
+  assert.equal(resolveCodexProvider({ list: () => ['spawn', 'codex'], getProvider: (n) => (n === 'codex' ? {} : undefined) }), 'codex');
+  // A registration name in another letter case is still the Codex backend, and
+  // is started under the name the deployment actually used.
+  assert.equal(resolveCodexProvider({ list: () => ['spawn', 'Codex'], getProvider: () => undefined }), 'Codex');
+  // Substring matches are deliberately not candidates: a provider that merely
+  // mentions Codex is not evidence that it IS the Codex backend, and guessing
+  // would send the user's work somewhere they did not choose.
+  assert.equal(resolveCodexProvider({ list: () => ['codex-acp', 'my-codex-fork'], getProvider: () => undefined }), undefined);
+  // Two claimants is an error, not a coin toss.
+  assert.throws(
+    () => resolveCodexProvider({ list: () => ['codex', 'CODEX'], getProvider: () => undefined }),
+    AmbiguousCodexBackendError,
+  );
+  // A broken table is "not known", never a throw from a capability read.
+  assert.deepEqual(resolveCodexProvider({ list: () => { throw new Error('gone'); } }), undefined);
+});
+
+test('the architect keeps spawn, its own route, and its high reasoning effort', async () => {
+  const { dispatcher, agent, calls } = makeDispatcher({
+    subagents: { a: ARCHITECT_DEFINITION },
+    providers: [SUBAGENT_PROVIDER, 'codex'],
+  });
+  const outcome = await dispatcher.dispatch({ agent, reference: 'code-architect', task: '审查这次修改' });
+  assert.equal(calls.start[0].name, SUBAGENT_PROVIDER);
+  assert.equal(calls.start[0].request.agentOptions.reasoningEffort, 'high');
+  assert.equal(calls.start[0].request.agentOptions.model, 'gpt-6.1-sol');
+  assert.ok(calls.start[0].request.persona.includes('代码架构师'));
+  assert.equal(outcome.subagent.routeLabel, 'openai-codex/gpt-6.1-sol · high');
+});
+
+test('buildCodexRequest refuses to carry a start capability, by key', () => {
+  // The guard is what turns "never send these to Codex" from a comment into a
+  // property. This asserts the guard itself, so a future edit that adds
+  // `maxDepth` back to the builder fails here rather than at the seam.
+  const request = buildCodexRequest({ definition: CODEX_DEFINITION, agent: { id: 'a' }, prompt: 'p' });
+  assert.deepEqual(Object.keys(request).sort(), ['label', 'parent', 'prompt']);
+  assert.equal(request.prompt[0].type, 'text');
+
+  const spawn = buildSpawnRequest({
+    definition: ARCHITECT_DEFINITION, agent: { id: 'a' }, prompt: 'p', persona: 'persona',
+  });
+  for (const key of ['agentOptions', 'persona', 'maxDepth']) {
+    assert.ok(key in spawn, `the spawn request must carry ${key}`);
+  }
+  // And the signal is omitted rather than passed as `undefined`: the seam reads
+  // the property, so `signal: undefined` is a cancellation channel it will try
+  // to use.
+  assert.equal('signal' in spawn, false);
+  assert.equal('signal' in request, false);
+  const controller = new AbortController();
+  assert.equal(buildCodexRequest({ definition: CODEX_DEFINITION, agent: {}, prompt: 'p', signal: controller.signal }).signal, controller.signal);
+});
+
+test('the two backends do not share a request shape', async () => {
+  // Sending the spawn body to Codex would fail loudly at `start`; sending the
+  // Codex body to spawn would silently drop the route and the persona. The
+  // dispatcher must therefore branch, and this asserts it did.
+  const spawnRun = makeDispatcher({ subagents: { a: ARCHITECT_DEFINITION } });
+  await spawnRun.dispatcher.dispatch({ agent: spawnRun.agent, reference: 'code-architect', task: 't' });
+  const codexRun = makeDispatcher({ subagents: { c: CODEX_DEFINITION }, providers: ['spawn', 'codex'] });
+  await codexRun.dispatcher.dispatch({ agent: codexRun.agent, reference: 'code-expert', task: 't' });
+  const spawnKeys = Object.keys(spawnRun.calls.start[0].request).sort();
+  const codexKeys = Object.keys(codexRun.calls.start[0].request).sort();
+  assert.notDeepEqual(codexKeys, spawnKeys);
+  assert.ok(spawnKeys.length > codexKeys.length);
 });

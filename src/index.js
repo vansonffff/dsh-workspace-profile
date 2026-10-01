@@ -52,7 +52,7 @@ import { MatterResolver } from './matter-resolution.js';
 import { ModelCatalog } from './model-catalog.js';
 import { ProfileRuntime, loadProfileTexts } from './profile-runtime.js';
 import { SkillPolicy, disabledSkillNames } from './skill-policy.js';
-import { SubagentDispatcher } from './subagent-dispatch.js';
+import { SubagentDispatcher, resolveCodexProvider } from './subagent-dispatch.js';
 import { createOperations } from './remote/operations.js';
 import { WorkspaceProfileService } from './service.js';
 import { registerWorkspaceSubagentTool } from './tools.js';
@@ -282,23 +282,50 @@ export function apply(ctx, config = {}) {
   });
 
   /**
+   * Which subagent backends this deployment can actually run.
+   *
+   * Two separate questions, and the page asks both:
+   *
+   * - `spawnProvider` — the in-process backend, looked up under its fixed name.
+   * - `codexBackend` / `codexBackendProblem` — the official Codex backend, which
+   *   this plugin neither installs nor depends on. It is **detected** from the
+   *   live provider table (see `resolveCodexProvider`), and the result is
+   *   published so Settings can say "Codex 后端可用 / 未安装" before the user saves
+   *   a definition that cannot run. Detection failing is reported as a message
+   *   rather than swallowed: "unavailable" and "I could not tell" are different
+   *   answers, and only one of them is the user's problem to fix.
+   *
+   * @returns {{ codexBackend: string|null, codexBackendProblem: string|null }} the Codex verdict.
+   */
+  function codexBackendCapability() {
+    try {
+      return { codexBackend: resolveCodexProvider(getSubagents()) ?? null, codexBackendProblem: null };
+    } catch (error) {
+      logger?.warn?.(`workspace-profile: could not determine the Codex backend: ${messageOf(error)}`);
+      return { codexBackend: null, codexBackendProblem: messageOf(error) };
+    }
+  }
+
+  /**
    * Which seams are mounted, for the Settings page.
    *
    * Reported rather than logged because the page has to explain itself: a
    * deployment without `subagents` must say "delegation is unavailable in this
    * composition", not render a button that fails.
    *
-   * @returns {Record<string, boolean>} the capability map.
+   * @returns {Record<string, any>} the capability map.
    */
   function capabilities() {
+    const subagents = getSubagents();
     return {
       settings: store !== undefined,
       workspace: getRegistry() !== undefined,
       skills: getSkills() !== undefined,
       models: getLlm() !== undefined,
       systemPrompt: ctx.get('systemPrompt') !== undefined,
-      subagents: getSubagents() !== undefined,
-      spawnProvider: getSubagents()?.getProvider('spawn') !== undefined,
+      subagents: subagents !== undefined,
+      spawnProvider: subagents?.getProvider('spawn') !== undefined,
+      ...codexBackendCapability(),
       remote: service !== undefined,
       // Reported even though nothing renders it today: "the Workspace covers more
       // than one directory and this composition cannot see that" is the difference

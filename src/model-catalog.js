@@ -32,6 +32,7 @@
  */
 
 import { MissingCapabilityError, UnresolvableRouteError } from './errors.js';
+import { subagentBackend } from './policy.js';
 
 /**
  * How long a catalog observation stays fresh.
@@ -201,22 +202,37 @@ export class ModelCatalog {
   /**
    * Assert that a route will actually run, and report what it resolved to.
    *
-   * Order matters and is deliberate:
-   * 1. shape — provider and model must both be present and non-blank;
-   * 2. provider registered — `NO_ADAPTER` is a configuration fact worth naming;
-   * 3. model membership — only when the adapter advertises a catalog;
-   * 4. effort membership — only when the route declares an effort list;
-   * 5. `resolveCallConfig` — the seam's own preflight, and the final authority.
+   * ## A Codex definition has no DSH route, and that is not a failure
    *
-   * @param {{ provider?: unknown, model?: unknown, reasoningEffort?: unknown }} route - the route to check.
+   * `provider`/`model`/`reasoningEffort` are DSH **LLM route** fields. A
+   * definition running on the Codex backend stores none of them: its model comes
+   * from the Codex provider's own configuration, which this plugin neither reads
+   * nor writes (see `policy.js#validateSubagentDefinition`, which is why such a
+   * definition is even valid). Running it through this preflight would therefore
+   * report "no complete model route" for a definition that is perfectly
+   * well-formed — a false error, which is worse than no check at all. So the
+   * question is answered before the checks start, and `llm` is not required.
+   *
+   * Order matters for everything else, and is deliberate:
+   * 1. backend — a `codex` route is not an LLM route at all;
+   * 2. shape — provider and model must both be present and non-blank;
+   * 3. provider registered — `NO_ADAPTER` is a configuration fact worth naming;
+   * 4. model membership — only when the adapter advertises a catalog;
+   * 5. effort membership — only when the route declares an effort list;
+   * 6. `resolveCallConfig` — the seam's own preflight, and the final authority.
+   *
+   * @param {{ provider?: unknown, model?: unknown, reasoningEffort?: unknown, backend?: unknown }} route - the route to check.
    * @param {AbortSignal} [signal] - caller cancellation.
-   * @returns {Promise<{ provider: string, model: string, reasoningEffort?: string, providerName?: string, modelName?: string }>}
+   * @returns {Promise<{ provider?: string, model?: string, reasoningEffort?: string, providerName?: string, modelName?: string, backend?: string }>}
    *   the validated route, ready to hand to `AgentOptions`.
    * @throws {UnresolvableRouteError} when any step fails, with a message that
    *   names the failing part and the next action.
    * @throws {MissingCapabilityError} when no `llm` service is mounted.
    */
   async assertRoute(route, signal) {
+    if (subagentBackend(route) === 'codex') {
+      return { backend: 'codex' };
+    }
     const provider = typeof route?.provider === 'string' ? route.provider.trim() : '';
     const model = typeof route?.model === 'string' ? route.model.trim() : '';
     const effort =

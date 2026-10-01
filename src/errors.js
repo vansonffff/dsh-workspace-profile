@@ -93,6 +93,53 @@ export class UnknownSubagentError extends WorkspaceProfileError {
   }
 }
 
+/**
+ * A Subagent asked for the Codex backend, and this deployment does not have one.
+ *
+ * This error exists to make one behaviour impossible to mistake for another: the
+ * plugin **never** substitutes a different backend. It does not fall back to
+ * `spawn`, it does not silently pick the parent's model, and it does not install
+ * anything. A run that cannot happen on the transport the definition names does
+ * not happen at all, and says so here.
+ */
+export class CodexBackendUnavailableError extends WorkspaceProfileError {
+  /**
+   * @param {string} reference - the Subagent's key.
+   * @param {string[]} registered - the provider names this deployment does register.
+   */
+  constructor(reference, registered) {
+    const list = registered.length > 0 ? registered.join(', ') : '(none)';
+    super(
+      'codex-backend-unavailable',
+      `Workspace Subagent "${reference}" is configured to run on Codex, and no Codex subagent backend is registered in this deployment ` +
+        `(registered providers: ${list}). Nothing was started and nothing was substituted: this plugin never falls back to the DSH \`spawn\` backend or ` +
+        'to another model. Install and enable the official Codex backend package in this deployment, then restart the Host; or edit the Subagent in ' +
+        'Settings → Workspace Configuration and choose the DSH subagent backend.',
+      { reference, registered },
+    );
+  }
+}
+
+/**
+ * More than one registered provider claims to be the Codex backend.
+ *
+ * Detected rather than guessed: if two providers both answer to a Codex name,
+ * picking one would be a coin toss over where the user's work runs.
+ */
+export class AmbiguousCodexBackendError extends WorkspaceProfileError {
+  /**
+   * @param {string[]} candidates - the provider names that matched.
+   */
+  constructor(candidates) {
+    super(
+      'ambiguous-codex-backend',
+      `more than one registered subagent provider claims to be the Codex backend (${candidates.join(', ')}), so this plugin cannot tell which one a Codex ` +
+        'Subagent should run on. Nothing was started. Leave exactly one Codex provider enabled in the deployment composition, then restart the Host.',
+      { candidates },
+    );
+  }
+}
+
 /** A Subagent definition is malformed, or collides with an existing one. */
 export class InvalidSubagentError extends WorkspaceProfileError {
   /**
