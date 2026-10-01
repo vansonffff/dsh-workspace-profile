@@ -1889,7 +1889,10 @@ function templates() {
 function dialogSource() {
   const at = SOURCE.indexOf('function SubagentDialog');
   assert.ok(at !== -1, 'the Subagent dialog is still in the bundle');
-  return SOURCE.slice(at, at + 9000);
+  // 12000, not the original 9000: the dialog grew (执行方式, Codex status), and a
+  // window that ends mid-row makes an assertion fail on a feature that exists —
+  // the same trap `backendControlSource` hit when it measured by character count.
+  return SOURCE.slice(at, at + 12000);
 }
 
 /**
@@ -2325,6 +2328,16 @@ test('the Codex template fills no route, in either direction', () => {
     backend: 'codex', key: 'code-expert', name: '代码专家', description: expert.description,
     provider: '', model: '', reasoningEffort: '', instructions: '',
   });
+});
+
+test('the name column carries the same hint line as the Key column', () => {
+  const source = dialogSource();
+  // The two side-by-side columns used to differ by exactly one hint line, which
+  // is what made the row look unbalanced: Key had one, 名称 had none.
+  assert.match(source, /value: form\.name,\s*\n\s*onChange: \(event\) => update\(\{ name: event\.target\.value \}\),\s*\n\s*\}\),\s*\n\s*jsx\('div', \{ className: C\.fieldStackHint, children: t\('nameHint'\) \}\)/,
+    'the name input is followed by its own hint, same class as the Key hint');
+  assert.match(source, /jsx\('div', \{ className: C\.fieldStackHint, children: created \? t\('keyHint'\) : t\('keyLocked'\) \}\)/,
+    'the Key hint is still there');
 });
 
 test('the dialog shows the Codex availability the Host reported', () => {

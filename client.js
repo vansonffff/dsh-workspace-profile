@@ -896,6 +896,7 @@ window.__ModuleLoader__.load({
         fInstructions: '补充工作指引',
         fEnabled: '启用',
         effortDefault: '（模型默认）',
+        nameHint: '显示用名，可随时修改。重名时 @ 调用请用 Key 区分。',
         keyHint: '创建后不可修改。只能用小写字母、数字和连字符。',
         keyLocked: '创建后不可修改。要换 key，请复制为新定义再删除旧的。',
         descHint: '一句话职责。它会进入模型可见的专家目录，请写清"做什么"。',
@@ -1062,6 +1063,7 @@ window.__ModuleLoader__.load({
         fInstructions: 'Extra guidance',
         fEnabled: 'Enabled',
         effortDefault: '(model default)',
+        nameHint: 'Display name, editable anytime. On duplicates, address it by Key.',
         keyHint: 'Cannot be changed after creation. Lowercase letters, digits and hyphens only.',
         keyLocked: 'Cannot be changed after creation. To rename, duplicate under the new key and delete the original.',
         descHint: 'One line. It goes into the model-visible expert directory, so state what it does.',
@@ -3100,6 +3102,7 @@ window.__ModuleLoader__.load({
                 value: form.name,
                 onChange: (event) => update({ name: event.target.value }),
               }),
+              jsx('div', { className: C.fieldStackHint, children: t('nameHint') }),
             ] }),
             jsxs('div', { className: C.fieldStack, children: [
               jsx('label', { className: C.fieldStackLabel, children: t('fKey') }),
