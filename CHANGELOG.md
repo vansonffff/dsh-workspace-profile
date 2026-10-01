@@ -274,7 +274,7 @@ here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
   cannot find.
 - Real client data was removed before this repository was published.
 
-[0.6.0]: https://github.com/vansonffff/dsh-workspace-profile/compare/v0.5.0...main
+[0.6.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.6.0
 [0.5.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.5.0
 [0.4.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.4.0
 [0.3.0]: https://github.com/vansonffff/dsh-workspace-profile/releases/tag/v0.3.0
