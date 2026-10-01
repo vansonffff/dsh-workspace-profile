@@ -284,6 +284,7 @@ browser calls.
 baseline  (0.5.0)                                                       250 tests
 0.6.0     RELEASE_CHECK=1 node --test "test/*.test.js"                  319 tests   all green
 repair    (acceptance, below)                                           322 tests   all green
+repair 2  (the banner removal below, owner's request)                   323 tests   all green
 ```
 
 New files: `test/backend-model.test.js` (the write path), `test/mention-source.test.js`
@@ -370,6 +371,48 @@ the same string for every reachable fixture — the local fallback exists precis
 an un-restarted Host renders the same label — so the plant is behaviour-preserving
 and there is nothing for a test to catch. The two properties that *are* real are
 tested separately (the Host's label is shown; the fallback still works).
+
+### A second repair: the failed-match notice was removed *(应用户要求移除)*
+
+**Removed at the owner's request, in 0.6.0 — after the acceptance, before any tag.**
+Applying the 代码架构师 template when the live catalogue held no unique match for
+"GPT-6.1 Sol" rendered an orange banner under the form naming the reason —
+`no-catalog`, `not-found`, `ambiguous` or `no-effort`. The owner asked for that banner
+to go. What the dialog shows now is the empty route, and the user picks Provider and
+Model themselves.
+
+- **The resolution rule is untouched.** `resolveTemplateRoute` / `matchModelSpec`
+  still return the same verdicts, and `templateFormPatch` still fills a unique match
+  that supports `high` — that part of the template was never in question. Only the
+  rendering was deleted; the four failure reasons remain data, asserted directly in
+  `test/client-bundle.test.js`.
+- **Silence, not a fallback.** A failed match fills `provider: ''`, `model: ''` **and**
+  `reasoningEffort: ''`, so a stale `high` cannot ride along with a model the user
+  picks later. The save button's own required-route check (`!isCodex && (provider ===
+  '' || model === '')`) is the guard, and it already existed.
+- **Five copy keys deleted from both dictionaries** — `templateNeedsModel`,
+  `templateModelNoCatalog`, `templateModelNotFound`, `templateModelAmbiguous`,
+  `templateModelNoEffort`. The surviving `templateModelResolved` is still read by the
+  one notice that remains, so this removal left no dead key behind and
+  `test/panel-copy.test.js` (key parity, no English-only Chinese label) stays green.
+- **No negative-control row in the table above covers this**, so none was removed:
+  *"an ambiguous model spec resolves to the first match"* and *"the architect template
+  hard-codes a model id"* are controls on the resolution functions, which still exist
+  and still fire. The removal is a rendering change, and the entry you are reading is
+  the record of it rather than a rewrite of one.
+
+The check added for it — *"a model spec that does not resolve leaves the route empty
+and says nothing"* — was controlled three times, each plant made in `client.js` and
+the tree restored from a checksummed copy (`sha256 05280ace…`) afterwards:
+
+| Planted defect | Test that went red |
+|---|---|
+| The deleted copy key `templateNeedsModel` reappears in the Chinese bundle | *"a model spec that does not resolve…"* |
+| The failed match renders a notice again, in the warning colour | *"a model spec that does not resolve…"* |
+| A failed match fills `openai-codex/gpt-6.1-sol` anyway | *"the architect template resolves its model…, or fills nothing"* |
+
+The third plant is the one that matters most: it is the 不 fallback rule itself, and it
+goes red at the data level rather than through the copy.
 
 ### Doubles that are not more permissive than the runtime
 

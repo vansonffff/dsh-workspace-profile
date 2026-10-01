@@ -26,8 +26,9 @@ here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
   **not** hard-coded: the template names the model as the plan spells it ("GPT-6.1
   Sol") and the real `provider`/`model` is resolved from the live catalogue when the
   template is applied. Only a unique match that supports `high` is filled in;
-  otherwise nothing is filled, no other model is substituted, and the dialog says
-  why.
+  otherwise nothing is filled, no other model is substituted, and the route fields
+  stay empty for the user to choose (the notice that used to explain the failed
+  match was removed — see Fixed).
 - **`执行方式` in the Subagent editor**, offering `DSH 子代理` and `Codex`. Choosing
   Codex hides Provider / Model / Reasoning and shows the execution backend, the model
   rule, and whether a Codex backend is actually registered in this deployment.
@@ -80,6 +81,17 @@ here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
   The settlement is passed through now: the reason reaches the composer and the draft
   stays for a retry. A value with no `result` field refuses with the line named rather
   than throwing. `test/mention-source.test.js` asserts the error text arrives verbatim.
+- **The failed-match notice under the Subagent editor is gone.** Applying the
+  代码架构师 template when the live catalogue holds no unique match for "GPT-6.1 Sol"
+  rendered an orange banner naming the reason (`no-catalog` / `not-found` /
+  `ambiguous` / `no-effort`). It was removed at the owner's request: the route fields
+  come back empty and the user picks Provider and Model in the selects below, which is
+  the decision the banner was describing — and the save button's own required-route
+  check still refuses an empty route, so nothing was lost but the explanation.
+  **No resolution logic changed**: a unique match that supports `high` is still filled
+  in, nothing is guessed, and no other model is substituted. The five copy keys the
+  banner used are gone from both dictionaries, and `test/client-bundle.test.js`
+  asserts the silence and the empty route.
 
 ### Notes
 

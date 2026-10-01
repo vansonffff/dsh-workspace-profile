@@ -546,7 +546,9 @@ window.__ModuleLoader__.load({
      *   ids of a model whose name the plan gives in prose are **not** knowable
      *   from source, and hard-coding a guess would produce a template that fails
      *   its own preflight. If the catalog does not answer with exactly one
-     *   candidate for the spec, the template fills nothing and says so.
+     *   candidate for the spec, the template fills nothing and leaves the route
+     *   empty for the user to choose — silently, because 0.6.0 removed the notice
+     *   that used to explain the failed match.
      *
      * Module-level and exported on purpose. The create dialog only renders while
      * it is open, and the browser test harness builds a static tree, so a
@@ -668,10 +670,12 @@ window.__ModuleLoader__.load({
      * Resolve a template's model spec against the live catalog.
      *
      * The rule the plan sets out, implemented literally: **only a unique match
-     * that supports the requested effort is filled in**. Everything else reports
-     * why, and the dialog shows it, so the user picks from the real catalog
-     * instead of being handed a plausible-looking route that fails its own
-     * preflight.
+     * that supports the requested effort is filled in**. Everything else returns
+     * the reason to its caller instead of a route, so the user picks from the real
+     * catalog rather than being handed a plausible-looking route that fails its own
+     * preflight. The reason is **data**: the dialog no longer renders it — the
+     * failed-match notice was removed at the owner's request (CHANGELOG 0.6.0) —
+     * but the verdict stays observable here and in the tests.
      *
      * @param {any} catalog - the `models()` answer, or `null` when unavailable.
      * @param {string} spec - the requested model name.
@@ -867,12 +871,12 @@ window.__ModuleLoader__.load({
         fTemplate: '模板',
         templateNone: '不用模板 —',
         templateHint: '选中即填入下列字段，保存前都可以改。模板只是建议值，不会替你保存。',
-        templateNeedsModel: '这个模板的模型不能写死，已从实时模型目录里找过：',
+        // Only the resolved case still has a notice. A spec that matched nothing,
+        // matched twice, or matched a model without the requested effort fills no
+        // route and says nothing: the owner asked for that explanation to be
+        // removed (CHANGELOG 0.6.0), and the empty Provider / Model selects are
+        // the whole story — the user picks from the real catalog there.
         templateModelResolved: '已按实时模型目录填入：',
-        templateModelNoCatalog: '拿不到实时模型目录（本部署没有可用的模型服务），因此没有替你填模型，请手动选择。',
-        templateModelNotFound: '实时模型目录里没有唯一匹配的模型，因此没有替你填，也不会 fallback 到其他模型，请手动选择。',
-        templateModelAmbiguous: '实时模型目录里有多个同名匹配，插件不猜，请手动选择：',
-        templateModelNoEffort: '匹配到的模型不支持模板要求的推理强度，因此没有替你填，请手动选择：',
         fBackend: '执行方式',
         backendSpawn: 'DSH 子代理',
         backendCodex: 'Codex',
@@ -1037,12 +1041,8 @@ window.__ModuleLoader__.load({
         // Template labels, names and descriptions stay Chinese in every locale:
         // they are content the owner wrote, not UI copy this dictionary owns.
         templateHint: 'Fills the fields below; everything stays editable before saving. A template is a suggestion, never a saved definition.',
-        templateNeedsModel: 'This template must not hard-code its model. The live catalog was searched:',
+        // The failed-match notice is gone on purpose; see the Chinese bundle.
         templateModelResolved: 'Filled in from the live model catalog:',
-        templateModelNoCatalog: 'No live model catalog is available in this deployment, so no model was filled in — choose one yourself.',
-        templateModelNotFound: 'The live catalog has no unique match for this model, so nothing was filled in and no other model was substituted — choose one yourself.',
-        templateModelAmbiguous: 'The live catalog matched more than one entry; this plugin does not guess. Choose one yourself:',
-        templateModelNoEffort: 'The matched model does not offer the reasoning effort this template asks for, so nothing was filled in. Choose one yourself:',
         fBackend: 'Execution',
         backendSpawn: 'DSH subagent',
         backendCodex: 'Codex',
@@ -2954,13 +2954,18 @@ window.__ModuleLoader__.load({
        */
       const [templateId, setTemplateId] = useState('');
       /**
-       * What applying a template had to say about the route it could not write.
+       * The route a template's `modelSpec` was resolved to, when it was.
        *
-       * `null` when the template filled everything it owns. Otherwise
-       * `{ key, detail }` — the copy key plus the candidates, if any — rendered
-       * as a hint under the form. This is the plan's 不猜 / 不 fallback rule made
-       * visible: a template that could not resolve its model says so, rather
-       * than leaving the user with an empty route and no explanation.
+       * `null` unless applying a template resolved its spec against the live
+       * catalog and wrote the answer into the form; then `{ detail }` holds the
+       * `provider/model` that was filled in, rendered under the form.
+       *
+       * **A failed match says nothing.** The route fields stay empty and the user
+       * picks from the Provider / Model lists, which is the whole remedy — the
+       * notice that used to name the four failure reasons was removed at the
+       * owner's request (CHANGELOG 0.6.0). The plan's 不猜 / 不 fallback rule is
+       * unchanged: nothing is guessed, nothing is substituted; it is now enforced
+       * by the empty fields and the save button's own required-route check.
        */
       const [templateNote, setTemplateNote] = useState(null);
 
@@ -2989,18 +2994,13 @@ window.__ModuleLoader__.load({
         update(templateFormPatch(template, models));
         if (typeof template.modelSpec !== 'string') return;
         const resolved = resolveTemplateRoute(models ?? null, template.modelSpec, template.reasoningEffort);
-        if (resolved.ok) {
-          setTemplateNote({ key: 'templateModelResolved', detail: resolved.provider + '/' + resolved.model });
-          return;
-        }
-        setTemplateNote({
-          key: resolved.reason === 'no-catalog' ? 'templateModelNoCatalog'
-            : resolved.reason === 'ambiguous' ? 'templateModelAmbiguous'
-              : resolved.reason === 'no-effort' ? 'templateModelNoEffort'
-                : 'templateModelNotFound',
-          prefix: 'templateNeedsModel',
-          detail: resolved.candidates.join('、'),
-        });
+        // Only the answer that was written in is announced. Every failure reason
+        // (`no-catalog`, `not-found`, `ambiguous`, `no-effort`) leaves the route
+        // empty **and silent**: the notice that explained the mismatch was removed
+        // at the owner's request. Nothing falls back to another model, and the save
+        // button still refuses an empty route for a spawn definition.
+        if (!resolved.ok) return;
+        setTemplateNote({ detail: resolved.provider + '/' + resolved.model });
       }, [update, models]);
 
       // Live route verdict. Cheap, and the difference between finding out here and
@@ -3152,12 +3152,13 @@ window.__ModuleLoader__.load({
                   ],
                 })
               : jsx('div', { className: C.fieldStackHint, children: t('backendNoteSpawn') }),
+            // The one notice a template can still raise, and it is green: the route
+            // the live catalog answered with. A template that resolved nothing
+            // raises none — see `applyTemplate`.
             templateNote !== null
               ? jsx('div', {
-                  className: C.notice + ' ' + (templateNote.prefix === undefined ? C.noticeOk : C.noticeWarn),
-                  children:
-                    (templateNote.prefix === undefined ? '' : t(templateNote.prefix))
-                    + t(templateNote.key)
+                  className: C.notice + ' ' + C.noticeOk,
+                  children: t('templateModelResolved')
                     + (templateNote.detail === '' ? '' : ' ' + templateNote.detail),
                 })
               : null,

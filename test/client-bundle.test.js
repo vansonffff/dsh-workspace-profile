@@ -2183,7 +2183,7 @@ test('a Codex save sends no route fields at all', () => {
   assert.match(source, /backend: initial && initial\.backend === 'codex' \? 'codex' : 'spawn',/);
 });
 
-test('the architect template resolves its model from the live catalog, or says why not', () => {
+test('the architect template resolves its model from the live catalog, or fills nothing', () => {
   const entry = loadBundle();
   const patch = entry.exports.templateFormPatch;
   const resolve = entry.exports.resolveTemplateRoute;
@@ -2241,6 +2241,80 @@ test('the architect template resolves its model from the live catalog, or says w
   // And a near miss is not a match: the comparison is the whole normalized name.
   assert.equal(resolve(catalog, 'GPT-6.1', 'high').ok, false);
   assert.equal(resolve(catalog, 'Sol', 'high').ok, false);
+
+  // What each of those four failures leaves in the form, driven through the very
+  // catalogue shape the dialog hands over. This is the state the owner saw: both
+  // route fields empty, ready for a manual pick — and, since the notice was
+  // removed, the empty selects are the entire answer. The effort goes with the
+  // model it was asked for, so a failed match cannot leave `high` behind either.
+  const unanswered = {
+    'no catalogue': patch(architect, null),
+    'not found': patch(architect, {
+      available: true,
+      providers: [{ provider: 'openai-codex', models: [
+        { id: 'gpt-6.1-sol-mini', name: 'GPT-6.1 Sol Mini', efforts: [{ id: 'high' }] },
+      ] }],
+    }),
+    ambiguous: patch(architect, twin),
+    'no effort': patch(architect, {
+      available: true,
+      providers: [{ provider: 'openai-codex', models: [
+        { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: [{ id: 'low' }] },
+      ] }],
+    }),
+  };
+  for (const [reason, result] of Object.entries(unanswered)) {
+    const plain = JSON.parse(JSON.stringify(result));
+    assert.equal(plain.provider, '', `${reason}: a failed match fills no provider`);
+    assert.equal(plain.model, '', `${reason}: a failed match fills no model`);
+    assert.equal(plain.reasoningEffort, '', `${reason}: a failed match fills no reasoning effort`);
+  }
+});
+
+test('a model spec that does not resolve leaves the route empty and says nothing', () => {
+  // The orange banner the owner asked to remove: a template whose `modelSpec` had
+  // no unique catalog match used to explain itself under the form. Its copy keys
+  // are gone from **both** dictionaries, so a re-added notice cannot borrow one and
+  // come back in a single language; the panel-copy parity test would catch a
+  // half-restore, this catches the whole thing.
+  for (const key of [
+    'templateNeedsModel',
+    'templateModelNoCatalog',
+    'templateModelNotFound',
+    'templateModelAmbiguous',
+    'templateModelNoEffort',
+  ]) {
+    assert.equal(SOURCE.includes(key), false,
+      `${key}: the failed-match notice was removed at the owner's request — see CHANGELOG 0.6.0`);
+  }
+
+  // Source-level by necessity, exactly like the template control: the dialog only
+  // renders while it is open, so what the browser would show is asserted here.
+  const source = dialogSource();
+  assert.match(source, /if \(!resolved\.ok\) return;/,
+    'the failure path returns without setting a note');
+  assert.equal(/resolved\.reason/.test(source), false,
+    'the dialog no longer branches on why a spec did not resolve');
+  assert.equal(source.includes('templateNote.prefix'), false,
+    'there is no warning variant of the template notice left');
+  assert.match(source, /setTemplateNote\(\{ detail: resolved\.provider \+ '\/' \+ resolved\.model \}\);/,
+    'only a resolved route sets a note');
+
+  // The notice's own render block. `dialogSource()`'s 9000 characters stop short of
+  // it, and a whole-file match would let an unrelated notice satisfy the assertion —
+  // so it is sliced from the marker that starts it.
+  const at = SOURCE.indexOf('templateNote !== null');
+  assert.ok(at !== -1, 'the resolved route is still announced');
+  const end = SOURCE.indexOf('isCodex', at);
+  assert.ok(end > at, 'the notice block is still followed by the route row');
+  const notice = SOURCE.slice(at, end);
+  // The one notice a template can raise is the green "filled in from the live
+  // catalog"; the warning colour is no longer reachable from a template, and the
+  // key it reads is still used — a key nothing reads is copy the next person
+  // deletes by accident.
+  assert.match(notice, /className: C\.notice \+ ' ' \+ C\.noticeOk,/);
+  assert.equal(notice.includes('noticeWarn'), false, 'a failed match has no colour of its own any more');
+  assert.match(notice, /t\('templateModelResolved'\)/);
 });
 
 test('the Codex template fills no route, in either direction', () => {

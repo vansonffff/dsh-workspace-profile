@@ -205,7 +205,10 @@ The architect's model is deliberately **not** written down. The template names i
 way the plan spells it and resolves the real `provider`/`model` from the live
 catalogue when applied — and only when exactly one entry matches **and** it offers
 `high`. No unique match fills nothing: no fallback to another GPT, no quiet
-substitution, and the dialog names which of the four reasons applied.
+substitution, and the route fields are left empty for you to pick in the Provider and
+Model selects below. The dialog no longer explains a failed match — that banner was
+removed on request — and it does not need to: an unfilled route is visible, and 创建
+stays disabled until one is chosen.
 
 They live in `client.js` rather than the host half on purpose: a template is
 pre-fill material — nothing to persist, nothing to sync across machines — and its
