@@ -114,7 +114,7 @@ hard-coded string.
 
 ### Where the plan and the platform disagree
 
-Two places, both measured against the source rather than guessed.
+Three places, all measured against the source rather than guessed.
 
 **(1) `matchEnter` is not reached for an `@` draft.** The composer's submit machine
 adjudicates only drafts that start with `/` — `SubmitMachine.onEnter` in
@@ -150,6 +150,36 @@ namespace is owned by another package (`locale.register` throws when a namespace
 already has that language). The heading therefore travels on each candidate's
 `section` field, which is the platform's own mechanism for naming a group in the
 reader's language, and `showGroupTitle` is `false`.
+
+**(3) A command's error is not always the composer's to report.** The platform's own
+command client returns plain success for a **handler** error whenever the draft
+carries no attachments — `CommandUiRuntime.execute` in
+`dsh-client-ui-commands/lib/client.js`:
+
+```js
+this.notifyExecuted(session.sessionId, submittedCommandName(line), result.value.result);
+if (attachments.length > 0 && result.value.result.kind === "error") return { kind: "error", text: result.value.result.text };
+return { kind: "success" };
+```
+
+Its comment gives the reason: the Host durably logs `command/run`/`command/done` and
+the outcome renders as a chat card, so the composer does not echo it — and the Host
+does record the text (`dsh-commands/lib/index.js`, the `settle()` that appends
+`command/done` with `kind` and `text`), which `CommandNodeView` renders
+(`dsh-client-ui-chat/lib/client.js`). So the 0.6.0 acceptance report that the reason
+"was completely discarded" holds for the composer — which is where it was noticed;
+the card is a reading of that source, not of a page (no browser was opened; see
+"What is **not** verified" below).
+
+The `@` claim departs from that mirror anyway, and not out of tidiness: §29's
+"Backend Missing" says `@代码专家` must **return** a clear error, and a success
+settlement also consumes the draft and the claim (`onSubmitSettled`, same file), so
+the user would retype the task after installing the backend. A failure has to reach
+the point of action. The cost is that a failed `@` run now shows the reason twice —
+once as the composer's notice, once as the card. The success branch keeps the
+platform's shape and drops the success text: `SubmitOutcome.text` is optional
+(`input.d.ts`), and a success text becomes an `info` notice, which for `/agent` is
+the child Agent's entire report in a smaller box.
 
 ### Which requirements a child is sent
 
@@ -252,19 +282,40 @@ browser calls.
 
 ```
 baseline  (0.5.0)                                                       250 tests
-final     RELEASE_CHECK=1 node --test "test/*.test.js"                  319 tests   all green
+0.6.0     RELEASE_CHECK=1 node --test "test/*.test.js"                  319 tests   all green
+repair    (acceptance, below)                                           322 tests   all green
 ```
 
 New files: `test/backend-model.test.js` (the write path), `test/mention-source.test.js`
 (the `@` source, driven as the platform drives it), `test/subagents-operation.test.js`
 (the browser's payload through the host's own operations, and the mention read).
 
+### A defect the 0.6.0 acceptance found, and its repair
+
+**`@` reported a failed dispatch as success.** `runAgentLine` read the wire answer
+and then returned `{ kind: 'success' }` for every settlement except a missing one —
+while this plugin's own `/agent` reports an absent Codex backend, an unmatched
+reference and a refused dispatch as `{ kind: 'error', text }`
+(`src/commands.js`, through `describeFailure`). So `@代码专家 修这个 bug` cleared the
+draft, consumed the claim and said nothing, with the reason dropped on the floor.
+
+The settlement is now passed through: `kind: 'error'` keeps its `text` and becomes an
+`error` outcome, which is what makes the composer show the reason **and** keep the
+draft and the claim for a retry. A value with no `result` field at all — a shape the
+wire schema does not allow — refuses with the line named rather than throwing.
+
+Same class of gap as the 0.5.0 write bug above: the harness stopped one layer short.
+`test/mention-source.test.js` asserted the **line** a mention sends
+(`/agent code-expert …`) and never the **answer** it translates, so a client that
+discarded every settlement was fully green. The three new cases drive
+`runAgentLine`'s translation with the Host's real wire shape.
+
 ### Negative controls
 
 Every check added in this milestone was shown to fail on a deliberately broken
 input before it was trusted. One planted defect at a time, the named test file then
-run; each control had to go **red**, and the tree was restored afterwards. 27
-controls, 27 fired.
+run; each control had to go **red**, and the tree was restored afterwards. 28
+controls, 28 fired.
 
 | Planted defect | Went red in |
 |---|---|
@@ -295,6 +346,23 @@ controls, 27 fired.
 | A Codex save stores the route it should not have | `test/client-bundle.test.js` |
 | The editor saves no backend at all | `test/client-bundle.test.js` |
 | The source is built from `ctx.remote`, read too early | `test/client-bundle.test.js` |
+| A dispatch failure is reported as success *(the acceptance repair)* | `test/mention-source.test.js` |
+
+The last row is the repair's own control: `runAgentLine` was put back to its shipped
+form — `undefined` refuses, every other value is success — and the file went
+**16/18**. Two of the three new cases went red: *"a failed dispatch reaches the
+composer as the Host's own error"*, with
+
+```
++ actual - expected
+  { + kind: 'success'   - kind: 'error',
+                        - text: 'Codex 后端未安装：本部署没有注册 Codex 子代理后端。…' }
+```
+
+and *"a value without a settlement is refused"*. The third — *"a success settlement
+is success, and its text is not echoed"* — stayed green, correctly: the plant does
+not touch that path. The tree was then restored from a checksummed copy
+(`sha256 5fe32d2b…`) and the full gate re-run against the restored file.
 
 One plant did **not** fire and is recorded as such rather than quietly dropped:
 *"a card ignores the Host `routeLabel`"*. Both branches of that expression produce
@@ -364,3 +432,10 @@ Two harness faults were fixed rather than worked around, both of the same class:
   that page was refused (see "A bug this release found and fixed"). Nothing in 0.5.0
   reported it as working — the milestone records the *rendering* as verified, which
   it was.
+- `README.md` said a display name shared by two experts is answered by "the notice
+  names the keys to use instead". That notice exists only in `matchEnter`, which this
+  platform never reaches for an `@` draft (disagreement (1) above), so in a real
+  composer the collision produces no notice at all: the space claims nothing, the
+  menu closes, and the line goes to the model as ordinary text. The README now says
+  to type the key instead. **No behaviour changed** — the notice is still there for
+  the enter hook, and the key still resolves.

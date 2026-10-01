@@ -153,8 +153,11 @@ it does not fork the composer:
 Only the current Workspace's enabled experts are listed, and both the display name
 and the key are searchable, so `@码农` and `@coding` reach the same agent. A leading
 token only: `请让 @代码专家 看看` is prose about an agent, not a dispatch. And if two
-experts share a display name, nothing is guessed — the notice names the keys to use
-instead.
+experts share a display name, nothing is guessed: the key resolves, the shared name
+does not. Type the key — `@coding` — for a name that collides. (The "use the key
+instead" notice lives in the enter hook, which this platform never reaches for an
+`@` draft; `docs/MILESTONE-0.6.md` records why, under "Where the plan and the
+platform disagree".)
 
 Every `@` ends in the same place as `/agent`: as a `CommandClaim` that submits
 `/agent <key> <task>`. The plugin adds selection, not a second execution path.
@@ -366,7 +369,7 @@ client.js            the Settings section, and the `@子代理` trigger source
 profiles/ perspectives/   the Profile and Perspective bodies, as Markdown
 scripts/             probes that run against a real booted composition, plus
                        matter-probe.mjs and matter-yaml-golden.py for the Matter reader
-test/                319 tests, and fixtures/ holding the PyYAML golden pair
+test/                322 tests, and fixtures/ holding the PyYAML golden pair
 docs/                ARCHITECTURE · COMPATIBILITY · PROFILE-CONTRACT · MILESTONE-0.1 · 0.1.1 · 0.1.2 · 0.2 · 0.3 · 0.4 · 0.5 · 0.6 · PLAN-0.6
 ```
 
@@ -394,7 +397,7 @@ loudly on any it cannot find, so it cannot paper over a dependency that was neve
 declared. Then:
 
 ```bash
-node --test "test/*.test.js"                             # 319 tests
+node --test "test/*.test.js"                             # 322 tests
 RELEASE_CHECK=1 node --test "test/*.test.js"             # the release gate: nothing skipped
 ```
 

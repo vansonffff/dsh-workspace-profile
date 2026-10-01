@@ -1687,12 +1687,28 @@ window.__ModuleLoader__.load({
     /**
      * Send one `/agent` line and translate its settlement for the composer.
      *
-     * Mirrors `dsh-client-ui-commands` on purpose, including the rule that an
-     * admitted command settles as success even when its *handler* failed: the
-     * Host durably logs the lifecycle and the outcome renders as a persistent
-     * flow node, so echoing it again would be a second copy of the same error.
-     * Only an admission failure — which never entered a handler and therefore
-     * logged nothing — needs the composer's own notice.
+     * The wire answer is `{ commandId, result }`, where `result` is the Host's own
+     * `CommandResult` (`dsh-api-remotes/lib/client.js`, the `commands/execute`
+     * descriptor). **The settlement is passed through**, because `/agent` reports
+     * every dispatch failure as `kind: 'error'` with the reason the user needs —
+     * an absent Codex backend, a reference that matches nothing, a refused
+     * dispatch. Reporting those as success is the one thing this translation must
+     * never do: the plan's §29 "Backend Missing" asks for a clear error, and a
+     * failed dispatch settles as an error so the composer keeps the draft (and the
+     * claim) instead of consuming it.
+     *
+     * This deliberately departs from `dsh-client-ui-commands.execute` in one place:
+     * that client returns plain success for a handler error when the draft carries
+     * no attachments, relying on the Host's `command/done` log rendering as a chat
+     * command card. The card is a second surface, not a substitute: the plan's §29
+     * asks `@代码专家` to *return* a clear error, and a success settlement also
+     * consumes the draft and the claim, so retrying after installing the backend
+     * would mean retyping the whole task.
+     *
+     * Success carries no text on purpose: `SubmitOutcome.text` is optional, the
+     * platform's own command client omits it, and a success settlement renders as
+     * an `info` notice — echoing the child Agent's whole report into the composer
+     * would duplicate the card.
      *
      * @param {any} commands - the mounted `remote.commands` namespace.
      * @param {string} sessionId - the Session scope of the call.
@@ -1708,7 +1724,20 @@ window.__ModuleLoader__.load({
       }
       const value = result !== null && typeof result === 'object' && 'ok' in result ? result.value : result;
       if (value === undefined) return { kind: 'error', text: 'unknown or malformed command: ' + line };
-      return { kind: 'success' };
+      const settled = value !== null && typeof value === 'object' ? value.result : undefined;
+      if (settled === null || typeof settled !== 'object') {
+        // A value without a settlement is not a shape this composer can report on.
+        // Refusing is the safe answer: "success" would claim a dispatch nobody
+        // confirmed, and throwing would lose the line that failed.
+        return { kind: 'error', text: 'malformed command result: ' + line };
+      }
+      if (settled.kind === 'success') return { kind: 'success' };
+      // Anything else is a failure to report, including a kind this build does not
+      // know — an unrecognised settlement is not evidence that the command ran.
+      const text = typeof settled.text === 'string' && settled.text !== ''
+        ? settled.text
+        : 'command failed: ' + line;
+      return { kind: 'error', text };
     }
 
     /**

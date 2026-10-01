@@ -73,6 +73,13 @@ here; `v0.1.2` is the last of those (`docs/MILESTONE-0.1*.md`).
   is about; a real rename is still refused loudly. `test/subagents-operation.test.js`
   closes the gap that hid it by driving the browser's own payload through the host's
   own operation.
+- **`@子代理` reported a failed dispatch as success.** `runAgentLine` read the wire
+  answer and then returned success for every settlement except a missing one, so
+  `@代码专家 修这个 bug` with no Codex backend installed cleared the draft and said
+  nothing — while `/agent` had answered `{ kind: 'error', text: 'Codex 后端未安装…' }`.
+  The settlement is passed through now: the reason reaches the composer and the draft
+  stays for a retry. A value with no `result` field refuses with the line named rather
+  than throwing. `test/mention-source.test.js` asserts the error text arrives verbatim.
 
 ### Notes
 

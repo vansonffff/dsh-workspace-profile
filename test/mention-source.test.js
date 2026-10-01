@@ -113,10 +113,12 @@ const t = (key, params) => (params === undefined ? key : key + ':' + JSON.string
  * @param {any[]} [options.rows] - the mention rows the Host returns.
  * @param {boolean} [options.unavailable] - answer "this session has no Workspace".
  * @param {Function} [options.answer] - a full replacement for the Remote call.
+ * @param {any} [options.commandAnswer] - a full replacement for `commands.execute`'s
+ *   answer, in the wire shape the Host really sends.
  * @returns {{ source: any, calls: any[], commands: any[], remote: any, settle: Function }}
  *   the source and the recorded traffic.
  */
-function makeSource({ rows = ROWS, unavailable = false, answer = null } = {}) {
+function makeSource({ rows = ROWS, unavailable = false, answer = null, commandAnswer = null } = {}) {
   const calls = [];
   const commands = [];
   const listeners = new Set();
@@ -133,6 +135,7 @@ function makeSource({ rows = ROWS, unavailable = false, answer = null } = {}) {
   const commandsApi = {
     execute: async (sessionId, line, attachments) => {
       commands.push({ sessionId, line, attachments });
+      if (commandAnswer !== null) return commandAnswer;
       return { ok: true, value: { commandId: 'c1', result: { kind: 'success' } } };
     },
   };
@@ -271,6 +274,61 @@ test('an empty task is refused before any command runs, and keeps the draft', as
   const outcome = await source.matchSpace(SESSION, '@码农').claim.submit('   ', {}, []);
   assert.deepEqual(plain(outcome), { kind: 'error', text: 'mentionNeedsTask' });
   assert.deepEqual(plain(commands), [], 'nothing is dispatched without a task');
+});
+
+test('a failed dispatch reaches the composer as the Host’s own error', async () => {
+  // The plan's §29 "Backend Missing" case: `@代码专家` must **return** a clear
+  // error, and the six characters it turns on must arrive verbatim. The reason is
+  // the Host's, not this bundle's — `/agent` settles an absent backend, an
+  // unmatched reference and a refused dispatch alike as `{ kind: 'error', text }`
+  // — so the only correct translation is to hand that settlement back. Reporting
+  // it as success is what the plan forbids: it also clears the draft and the
+  // claim, so the user would have to retype the task after installing the backend.
+  const text = 'Codex 后端未安装：本部署没有注册 Codex 子代理后端。插件不会自动安装、也不会改用 DSH 子代理或换模型。';
+  const { source, commands } = makeSource({
+    commandAnswer: { ok: true, value: { commandId: 'c9', result: { kind: 'error', text } } },
+  });
+  source.warm(SESSION);
+  await new Promise((resolve) => { setTimeout(resolve, 0); });
+
+  const claim = source.matchSpace(SESSION, '@代码专家');
+  assert.ok(claim && claim.claim, 'the mention still claims at the space');
+  const outcome = await claim.claim.submit('修这个 bug', {}, []);
+  assert.deepEqual(plain(outcome), { kind: 'error', text }, 'the failure reason must survive the translation');
+  assert.ok(outcome.text.includes('Codex 后端未安装'));
+  // The line still went out: this is a pass-through of the settlement, not a veto
+  // in the browser. Whether to retry is the Host's answer to act on, not this
+  // bundle's to pre-empt.
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].line, '/agent code-expert 修这个 bug');
+});
+
+test('a success settlement is success, and its text is not echoed into the composer', async () => {
+  // `SubmitOutcome.text` is optional (`input.d.ts`), and the platform's own command
+  // client omits it on success. It is omitted here too on purpose: the composer
+  // turns an outcome text into a notice, and `/agent`'s success text is the child
+  // Agent's entire report — which the Host already logs as a `command/done` and the
+  // chat renders as a card. Echoing it would be a second copy in a smaller box.
+  const { source } = makeSource({
+    commandAnswer: { ok: true, value: { commandId: 'c1', result: { kind: 'success', text: '【代码专家】已完成：…' } } },
+  });
+  source.warm(SESSION);
+  await new Promise((resolve) => { setTimeout(resolve, 0); });
+  const outcome = await source.matchSpace(SESSION, '@代码专家').claim.submit('看看这个 bug', {}, []);
+  assert.deepEqual(plain(outcome), { kind: 'success' });
+});
+
+test('a value without a settlement is refused, not reported as success', async () => {
+  // A shape the wire schema does not allow, kept as a guard: whatever the Host
+  // answered, nobody confirmed a dispatch, so "success" would be a claim this
+  // bundle cannot support. It must refuse without throwing — a throw would lose
+  // the line the user typed.
+  const { source } = makeSource({ commandAnswer: { ok: true, value: { commandId: 'c2' } } });
+  source.warm(SESSION);
+  await new Promise((resolve) => { setTimeout(resolve, 0); });
+  const outcome = await source.matchSpace(SESSION, '@码农').claim.submit('改一个类型错误', {}, []);
+  assert.equal(outcome.kind, 'error');
+  assert.ok(outcome.text.includes('/agent coding 改一个类型错误'), outcome.text);
 });
 
 test('a name shared by two enabled experts is never guessed', async () => {
